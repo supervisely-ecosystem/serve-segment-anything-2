@@ -20,3 +20,6 @@ RUN python3 -m pip install supervisely==6.73.145
 
 RUN apt-get install ffmpeg libgeos-dev libsm6 libxext6 libexiv2-dev libxrender-dev libboost-all-dev -y
 RUN pip install opencv-python
+
+RUN mkdir -p sam2_weights
+ADD sam2_weights /sam2_weights/
