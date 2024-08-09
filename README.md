@@ -1,1 +1,1 @@
-# serve-segment-anything-2
+# Serve Segment Anything 2

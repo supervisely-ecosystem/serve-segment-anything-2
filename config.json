@@ -1,0 +1,39 @@
+{
+    "name": "Serve Segment Anything 2",
+    "type": "app",
+    "version": "2.0.0",
+    "description": "Deploy SAM 2 model as REST API service",
+    "categories": [
+        "neural network",
+        "images",
+        "videos",
+        "interactive segmentation",
+        "segmentation & tracking",
+        "serve"
+    ],
+    "need_gpu": true,
+    "gpu": "required",
+    "session_tags": [
+        "sly_smart_annotation",
+        "deployed_nn_object_segmentation",
+        "sly_video_tracking"
+    ],
+    "community_agent": false,
+    "docker_image": "supervisely/segment-anything-2:1.0.0",
+    "instance_version": "6.7.33",
+    "entrypoint": "python -m uvicorn src.main:m.app --app-dir ./serve --host 0.0.0.0 --port 8000 --ws websockets",
+    "port": 8000,
+    "task_location": "application_sessions",
+    "license": {
+        "type": "Apache-2.0"
+    },
+    "modal_template_state": {
+        "autostart": false
+    },
+    "access_restriction": [
+        {
+            "instance": "community_free",
+            "message": "The best interactive models for AI-assisted segmentation are already deployed in the Supervisely Cloud and are available for auto-labeling to all platform users. The number of API calls and the ability to run this app on your own agent (GPU) are limited for Free accounts. To increase usage limits or run the app on your GPU, switch to the <a href=\"/billing\">Pro</a> plan or request the <a href=\"https://supervisely.com/contact-us/\" target=\"_blank\">Enterprise</a> Edition."
+        }
+    ]
+}

@@ -1,0 +1,7 @@
+sam2_weights/
+supervisely.env
+debug.env
+**/__pycache__/
+prompts/
+frames/
+app_data/
