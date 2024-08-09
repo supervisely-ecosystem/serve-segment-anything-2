@@ -18,6 +18,9 @@
         "deployed_nn_object_segmentation",
         "sly_video_tracking"
     ],
+    "allowed_shapes": [
+        "bitmap"
+    ],
     "community_agent": false,
     "docker_image": "supervisely/segment-anything-2:1.0.1",
     "instance_version": "6.7.33",
