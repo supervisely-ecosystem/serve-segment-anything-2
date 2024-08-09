@@ -34,9 +34,6 @@ load_dotenv("debug.env")
 api = sly.Api()
 root_source_path = str(Path(__file__).parents[1])
 debug_session = bool(os.environ.get("DEBUG_SESSION", False))
-weights_location_path = "/sam2_weights"
-if debug_session:
-    weights_location_path = "./sam2_weights"
 model_data_path = os.path.join(root_source_path, "models", "models.json")
 
 
@@ -65,6 +62,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         models_data = self.get_models(mode="info")
         selected_model = self.gui.get_checkpoint_info()["Model"]
         weights_path = models_data[selected_model]["weights_path"]
+        if debug_session:
+            weights_path = "." + weights_path
         config = models_data[selected_model]["config"]
         return weights_path, config
 

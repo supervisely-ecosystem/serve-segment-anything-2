@@ -6,7 +6,7 @@
         "SA-V test (J&F)": "75.0",
         "MOSE val (J&F)": "70.9",
         "LVOS v2 (J&F)": "75.3",
-        "weights_path": "sam2_weights/sam2_hiera_tiny.pt",
+        "weights_path": "/sam2_weights/sam2_hiera_tiny.pt",
         "config": "sam2_hiera_t.yaml"
     },
     {
@@ -16,7 +16,7 @@
         "SA-V test (J&F)": "74.9",
         "MOSE val (J&F)": "71.5",
         "LVOS v2 (J&F)": "76.4",
-        "weights_path": "sam2_weights/sam2_hiera_small.pt",
+        "weights_path": "/sam2_weights/sam2_hiera_small.pt",
         "config": "sam2_hiera_s.yaml"
     },
     {
@@ -26,7 +26,7 @@
         "SA-V test (J&F)": "74.7",
         "MOSE val (J&F)": "72.8",
         "LVOS v2 (J&F)": "75.8",
-        "weights_path": "sam2_weights/sam2_hiera_base_plus.pt",
+        "weights_path": "/sam2_weights/sam2_hiera_base_plus.pt",
         "config": "sam2_hiera_b+.yaml"
     },
     {
@@ -36,7 +36,7 @@
         "SA-V test (J&F)": "76.0",
         "MOSE val (J&F)": "74.6",
         "LVOS v2 (J&F)": "79.8",
-        "weights_path": "sam2_weights/sam2_hiera_large.pt",
+        "weights_path": "/sam2_weights/sam2_hiera_large.pt",
         "config": "sam2_hiera_l.yaml"
     }
 ]
