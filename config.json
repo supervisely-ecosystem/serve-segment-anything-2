@@ -1,5 +1,5 @@
 {
-    "name": "Serve Segment Anything 2",
+    "name": "Serve Segment Anything v2",
     "type": "app",
     "version": "2.0.0",
     "description": "Deploy SAM 2 model as REST API service",
@@ -11,6 +11,9 @@
         "segmentation & tracking",
         "serve"
     ],
+    "icon": "https://github.com/user-attachments/assets/7c98d194-55b0-4b2a-9a0f-ea9dbd961f96",
+    "icon_cover": true,
+    "poster": "https://github.com/user-attachments/assets/2a61ab91-553b-4d98-808f-b20881829d59",
     "need_gpu": true,
     "gpu": "required",
     "session_tags": [
