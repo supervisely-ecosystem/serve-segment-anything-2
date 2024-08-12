@@ -11,9 +11,9 @@
         "segmentation & tracking",
         "serve"
     ],
-    "icon": "https://github.com/user-attachments/assets/7c98d194-55b0-4b2a-9a0f-ea9dbd961f96",
+    "icon": "https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/v0.0.1/sam2_icon.png",
     "icon_cover": true,
-    "poster": "https://github.com/user-attachments/assets/2a61ab91-553b-4d98-808f-b20881829d59",
+    "poster": "https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/v0.0.1/sam2_poster.png",
     "need_gpu": true,
     "gpu": "required",
     "session_tags": [
