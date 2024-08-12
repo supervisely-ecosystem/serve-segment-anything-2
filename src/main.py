@@ -350,6 +350,24 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         cy = int((moments["m01"] + 1e-7) / (moments["m00"] + 1e-7))
         return [cx, cy]
 
+    def generate_artificial_prompt(self, bitmap):
+        mask = bitmap.data
+        origin_row, origin_col = bitmap.origin.row, bitmap.origin.col
+        row_indexes, col_indexes = np.where(mask)
+        point_coordinates, point_labels = [], []
+        for i in range(2):
+            idx = np.random.randint(0, len(row_indexes))
+            row_index, col_index = row_indexes[idx], col_indexes[idx]
+            row_index += origin_row
+            col_index += origin_col
+            point_coordinates.append([col_index, row_index])
+            point_labels.append(1)
+        prompt = {
+            "point_coordinates": point_coordinates,
+            "point_labels": point_labels,
+        }
+        return prompt
+
     def serve(self):
         super().serve()
         server = self._app.get_server()
@@ -486,14 +504,14 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 if "video" in smtool_state:
                     # save prompt to json file
                     video_id = smtool_state["video"]["video_id"]
-                    frame_index = str(smtool_state["video"]["frame_index"])
+                    # frame_index = str(smtool_state["video"]["frame_index"])
                     if not os.path.exists(f"prompts/{video_id}"):
                         os.makedirs(f"prompts/{video_id}")
                     bbox_str = (
                         f"{crop[0]['y']}-{crop[0]['x']}-{crop[1]['y']}-{crop[1]['x']}"
                     )
                     prompt = {
-                        frame_index: {
+                        "0": {
                             bbox_str: {
                                 "point_coordinates": point_coordinates,
                                 "point_labels": point_labels,
@@ -504,11 +522,11 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     if os.path.exists(prompt_filepath):
                         with open(prompt_filepath, "r") as file:
                             previous_prompt = json.load(file)
-                        if frame_index in previous_prompt:
-                            if not bbox_str in previous_prompt[frame_index]:
-                                prompt[frame_index] = {
-                                    **prompt[frame_index],
-                                    **previous_prompt[frame_index],
+                        if "0" in previous_prompt:
+                            if not bbox_str in previous_prompt["0"]:
+                                prompt["0"] = {
+                                    **prompt["0"],
+                                    **previous_prompt["0"],
                                 }
                         else:
                             prompt = {**previous_prompt, **prompt}
@@ -538,7 +556,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     bitmap_center = self.get_bitmap_center(bitmap)
                     bitmap_center_str = f"{bitmap_center[0]}-{bitmap_center[1]}"
                     bitmap_data = {
-                        frame_index: {
+                        "0": {
                             bitmap_center_str: bbox_str,
                         }
                     }
@@ -546,14 +564,11 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     if os.path.exists(bitmap_data_path):
                         with open(bitmap_data_path, "r") as file:
                             previous_bitmap_data = json.load(file)
-                        if frame_index in previous_bitmap_data:
-                            if (
-                                not bitmap_center_str
-                                in previous_bitmap_data[frame_index]
-                            ):
-                                bitmap_data[frame_index] = {
-                                    **bitmap_data[frame_index],
-                                    **previous_bitmap_data[frame_index],
+                        if "0" in previous_bitmap_data:
+                            if not bitmap_center_str in previous_bitmap_data["0"]:
+                                bitmap_data["0"] = {
+                                    **bitmap_data["0"],
+                                    **previous_bitmap_data["0"],
                                 }
                     with open(bitmap_data_path, "w") as file:
                         json.dump(bitmap_data, file)
@@ -632,6 +647,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         @send_error_data
         def track(request: Request):
             # get input data
+            mode = "user clicks"
             context = request.state.context
             api = request.state.api
             video_id = context["videoId"]
@@ -649,15 +665,13 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             fend = start_frame + n_frames
             # check if prompt exist (if we are working with masks created by model)
             if not os.path.exists(prompt_path):
-                raise RuntimeError(
-                    "Only tracking of masks created by SAM2 is supported"
-                )
+                mode = "artificial clicks"
             # download frames
             for i in range(n_frames + 1):
-                frame_index = start_frame + i
+                frame_index = i + start_frame
                 frame_np = api.video.frame.download_np(video_id, frame_index)
                 frame_img = Image.fromarray(frame_np)
-                frame_img.save(f"{frames_dir}/{frame_index}.jpeg")
+                frame_img.save(f"{frames_dir}/{i}.jpeg")
                 pbar_pos += 1
                 api.video.notify_progress(
                     track_id,
@@ -668,12 +682,14 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     pbar_length,
                 )
             # get input prompts
-            with open(prompt_path, "r") as file:
-                prompts = json.load(file)
-            frame_prompts = prompts[str(start_frame)]
-            with open(bitmap_data_path, "r") as file:
-                bitmap_data = json.load(file)
-            bitmap_frame_data = bitmap_data[str(start_frame)]
+            if mode == "user clicks":
+                with open(prompt_path, "r") as file:
+                    prompts = json.load(file)
+                frame_prompts = prompts["0"]
+            if mode == "user clicks":
+                with open(bitmap_data_path, "r") as file:
+                    bitmap_data = json.load(file)
+                bitmap_frame_data = bitmap_data["0"]
             # match frame prompts with figures
             figure_ids = context["figureIds"]
             figures_data = []
@@ -690,10 +706,13 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 geometry = sly.deserialize_geometry(
                     figure.geometry_type, figure.geometry
                 )
-                bitmap_center = self.get_bitmap_center(geometry)
-                bitmap_center_str = f"{bitmap_center[0]}-{bitmap_center[1]}"
-                bbox_str = bitmap_frame_data[bitmap_center_str]
-                figure_prompt = frame_prompts[bbox_str]
+                if mode == "user clicks":
+                    bitmap_center = self.get_bitmap_center(geometry)
+                    bitmap_center_str = f"{bitmap_center[0]}-{bitmap_center[1]}"
+                    bbox_str = bitmap_frame_data[bitmap_center_str]
+                    figure_prompt = frame_prompts[bbox_str]
+                else:
+                    figure_prompt = self.generate_artificial_prompt(geometry)
                 figure_data = {
                     "figure_id": figure_id,
                     "object_id": object_id,
@@ -711,7 +730,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 point_labels = fig_prompt["point_labels"]
                 _, out_obj_ids, out_mask_logits = video_predictor.add_new_points_or_box(
                     inference_state=inference_state,
-                    frame_idx=start_frame,
+                    frame_idx=0,
                     obj_id=fig_id,
                     points=point_coordinates,
                     labels=point_labels,
@@ -737,8 +756,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     pbar_length,
                 )
             # upload segmentation results to the platform
-            for frame_idx in range(1, n_frames + 1):
-                frame_result = video_segments[frame_idx]
+            for i in range(1, n_frames + 1):
+                frame_result = video_segments[i]
+                frame_idx = i + start_frame
                 for fig_id, masks in frame_result.items():
                     for mask in masks:
                         obj_id = fig_id2_obj_id[fig_id]
@@ -762,6 +782,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 )
             # reset predictor state
             video_predictor.reset_state(inference_state)
+            sly.fs.clean_dir(frames_dir)
+            sly.fs.clean_dir(f"prompts/{video_id}")
 
 
 if is_debug_with_sly_net():
