@@ -355,7 +355,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         origin_row, origin_col = bitmap.origin.row, bitmap.origin.col
         row_indexes, col_indexes = np.where(mask)
         point_coordinates, point_labels = [], []
-        for i in range(2):
+        for i in range(4):
             idx = np.random.randint(0, len(row_indexes))
             row_index, col_index = row_indexes[idx], col_indexes[idx]
             row_index += origin_row
