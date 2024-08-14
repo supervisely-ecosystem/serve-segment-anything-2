@@ -23,3 +23,5 @@ RUN pip install opencv-python
 
 RUN mkdir -p sam2_weights
 ADD sam2_weights /sam2_weights/
+
+LABEL python_sdk_version=6.73.145
