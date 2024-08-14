@@ -809,12 +809,13 @@ def clean_data():
     sly.logger.info("Successfully cleaned unnecessary app data")
 
 
-# --------------for debug--------------
-if os.path.exists("prompts"):
-    sly.fs.remove_dir("prompts")
-if os.path.exists("frames"):
-    sly.fs.remove_dir("frames")
-# -------------------------------------
+if debug_session:
+    if os.path.exists("prompts"):
+        sly.fs.remove_dir("prompts")
+    if os.path.exists("frames"):
+        sly.fs.remove_dir("frames")
+
 
 m.serve()
+m.gui._models_table.select_row(1)
 m.app.call_before_shutdown(clean_data)
