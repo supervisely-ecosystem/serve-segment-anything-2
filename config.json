@@ -1,5 +1,5 @@
 {
-    "name": "Serve Segment Anything v2",
+    "name": "Serve Segment Anything 2",
     "type": "app",
     "version": "2.0.0",
     "description": "Deploy SAM 2 model as REST API service",
@@ -11,9 +11,9 @@
         "segmentation & tracking",
         "serve"
     ],
-    "icon": "https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/v0.0.1/sam2_icon.png",
+    "icon": "https://github.com/user-attachments/assets/6ccd9592-7aff-4ba0-aca4-61d65e08993a",
     "icon_cover": true,
-    "poster": "https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/v0.0.1/sam2_poster.png",
+    "poster": "https://github.com/user-attachments/assets/642ee655-2e73-4d59-8d45-411e2cedac24",
     "need_gpu": true,
     "gpu": "required",
     "session_tags": [
