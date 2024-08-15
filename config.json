@@ -19,7 +19,8 @@
     "session_tags": [
         "sly_smart_annotation",
         "deployed_nn_object_segmentation",
-        "sly_video_tracking"
+        "sly_video_tracking",
+        "scalable"
     ],
     "allowed_shapes": [
         "bitmap"
