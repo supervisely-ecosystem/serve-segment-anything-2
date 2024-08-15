@@ -8,9 +8,6 @@ from cacheout import Cache
 from dotenv import load_dotenv
 from typing import Literal
 from typing import List, Any, Dict
-from sam2.build_sam import build_sam2, build_sam2_video_predictor
-from sam2.sam2_image_predictor import SAM2ImagePredictor
-from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from fastapi import Response, Request, status, BackgroundTasks
 from pathlib import Path
 from cachetools import LRUCache
@@ -23,10 +20,14 @@ from supervisely.io.fs import silent_remove
 from supervisely._utils import rand_str, is_debug_with_sly_net
 from supervisely.app.content import get_data_dir
 import supervisely.app.development as sly_app_development
+from sam2.build_sam import build_sam2, build_sam2_video_predictor
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 import functools
 import json
 import traceback
 from PIL import Image
+import mock
 
 
 load_dotenv("supervisely.env")
@@ -504,7 +505,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 if "video" in smtool_state:
                     # save prompt to json file
                     video_id = smtool_state["video"]["video_id"]
-                    # frame_index = str(smtool_state["video"]["frame_index"])
                     if not os.path.exists(f"prompts/{video_id}"):
                         os.makedirs(f"prompts/{video_id}")
                     bbox_str = (
@@ -644,8 +644,18 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
             return wrapper
 
+        def notqdm(iterable, *args, **kwargs):
+            """
+            replacement for tqdm that just passes back the iterable
+            useful to silence `tqdm` in tests
+            """
+            return iterable
+
+        @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
+        @mock.patch("sam2.utils.misc.tqdm", notqdm)
         @send_error_data
         def track(request: Request):
+            sly.logger.info("Starting tracking process...")
             # get input data
             mode = "user clicks"
             context = request.state.context
@@ -782,8 +792,11 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 )
             # reset predictor state
             video_predictor.reset_state(inference_state)
-            sly.fs.clean_dir(frames_dir)
-            sly.fs.clean_dir(f"prompts/{video_id}")
+            if os.path.exists(frames_dir):
+                sly.fs.clean_dir(frames_dir)
+            if os.path.exists(f"prompts/{video_id}"):
+                sly.fs.clean_dir(f"prompts/{video_id}")
+            sly.logger.info("Successfully finished tracking process")
 
 
 if is_debug_with_sly_net():

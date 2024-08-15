@@ -21,6 +21,8 @@ RUN python3 -m pip install supervisely==6.73.145
 RUN apt-get install ffmpeg libgeos-dev libsm6 libxext6 libexiv2-dev libxrender-dev libboost-all-dev -y
 RUN pip install opencv-python
 
+RUN pip3 install mock==5.1.0
+
 RUN apt-get -y install curl
 
 RUN apt -y install wireguard iproute2
