@@ -696,7 +696,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 with open(prompt_path, "r") as file:
                     prompts = json.load(file)
                 frame_prompts = prompts["0"]
-            if mode == "user clicks":
                 with open(bitmap_data_path, "r") as file:
                     bitmap_data = json.load(file)
                 bitmap_frame_data = bitmap_data["0"]
@@ -719,9 +718,12 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 if mode == "user clicks":
                     bitmap_center = self.get_bitmap_center(geometry)
                     bitmap_center_str = f"{bitmap_center[0]}-{bitmap_center[1]}"
-                    bbox_str = bitmap_frame_data[bitmap_center_str]
-                    figure_prompt = frame_prompts[bbox_str]
-                else:
+                    if bitmap_center_str in bitmap_frame_data:
+                        bbox_str = bitmap_frame_data[bitmap_center_str]
+                        figure_prompt = frame_prompts[bbox_str]
+                    else:
+                        mode = "artificial clicks"
+                if mode == "artificial clicks":
                     figure_prompt = self.generate_artificial_prompt(geometry)
                 figure_data = {
                     "figure_id": figure_id,
