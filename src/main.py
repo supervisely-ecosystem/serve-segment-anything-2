@@ -433,14 +433,17 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
             if hash_str not in self._inference_image_cache:
                 logger.debug(f"downloading image: {hash_str}")
-                image_np = functional.download_image_from_context(
-                    smtool_state,
-                    api,
-                    app_dir,
-                    cache_load_img=self.cache.download_image,
-                    cache_load_frame=self.cache.download_frame,
-                    cache_load_img_hash=self.cache.download_image_by_hash,
-                )
+                try:
+                    image_np = functional.download_image_from_context(
+                        smtool_state,
+                        api,
+                        app_dir,
+                        cache_load_img=self.cache.download_image,
+                        cache_load_frame=self.cache.download_frame,
+                        cache_load_img_hash=self.cache.download_image_by_hash,
+                    )
+                except Exception:
+                    image_np = api.image.download_np(smtool_state["image_id"])
                 self._inference_image_cache.set(hash_str, image_np)
             else:
                 logger.debug(f"image found in cache: {hash_str}")
