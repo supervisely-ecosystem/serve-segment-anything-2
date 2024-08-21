@@ -443,6 +443,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         cache_load_img_hash=self.cache.download_image_by_hash,
                     )
                 except Exception:
+                    logger.warn("Error loading image using cache", exc_info=True)
                     image_np = api.image.download_np(smtool_state["image_id"])
                 self._inference_image_cache.set(hash_str, image_np)
             else:
