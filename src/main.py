@@ -352,20 +352,31 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         return [cx, cy]
 
     def generate_artificial_prompt(self, bitmap):
+        # generate point prompts
         mask = bitmap.data
         origin_row, origin_col = bitmap.origin.row, bitmap.origin.col
         row_indexes, col_indexes = np.where(mask)
         point_coordinates, point_labels = [], []
-        for i in range(4):
+        for i in range(3):
             idx = np.random.randint(0, len(row_indexes))
             row_index, col_index = row_indexes[idx], col_indexes[idx]
             row_index += origin_row
             col_index += origin_col
             point_coordinates.append([col_index, row_index])
             point_labels.append(1)
+        # generate box prompt
+        rectangle = bitmap.to_bbox()
+        padding = 0.03
+        bbox = [
+            rectangle.left * (1 - padding),
+            rectangle.top * (1 - padding),
+            rectangle.right * (1 + padding),
+            rectangle.bottom * (1 + padding),
+        ]
         prompt = {
             "point_coordinates": point_coordinates,
             "point_labels": point_labels,
+            "bbox": bbox,
         }
         return prompt
 
@@ -725,6 +736,15 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     try:
                         bbox_str = bitmap_frame_data[bitmap_center_str]
                         figure_prompt = frame_prompts[bbox_str]
+                        top, left, bottom, right = bbox_str.split("-")
+                        padding = 0.03
+                        bbox = [
+                            int(left) * (1 - padding),
+                            int(top) * (1 - padding),
+                            int(right) * (1 + padding),
+                            int(bottom) * (1 + padding),
+                        ]
+                        figure_prompt["bbox"] = bbox
                     except Exception:
                         mode = "artificial clicks"
                 if mode == "artificial clicks":
@@ -744,12 +764,14 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 fig_prompt = figure_data["figure_prompt"]
                 point_coordinates = fig_prompt["point_coordinates"]
                 point_labels = fig_prompt["point_labels"]
+                bbox = fig_prompt["bbox"]
                 _, out_obj_ids, out_mask_logits = video_predictor.add_new_points_or_box(
                     inference_state=inference_state,
                     frame_idx=0,
                     obj_id=fig_id,
                     points=point_coordinates,
                     labels=point_labels,
+                    box=bbox,
                 )
             # run propagation throughout the video
             video_segments = {}  # per-frame segmentation results
