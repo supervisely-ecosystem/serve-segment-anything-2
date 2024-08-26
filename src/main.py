@@ -722,10 +722,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 if mode == "user clicks":
                     bitmap_center = self.get_bitmap_center(geometry)
                     bitmap_center_str = f"{bitmap_center[0]}-{bitmap_center[1]}"
-                    if bitmap_center_str in bitmap_frame_data:
+                    try:
                         bbox_str = bitmap_frame_data[bitmap_center_str]
                         figure_prompt = frame_prompts[bbox_str]
-                    else:
+                    except Exception:
                         mode = "artificial clicks"
                 if mode == "artificial clicks":
                     figure_prompt = self.generate_artificial_prompt(geometry)
