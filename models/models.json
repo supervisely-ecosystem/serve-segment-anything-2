@@ -1,42 +1,42 @@
 [
     {
-        "Model": "SAM 2 Hiera tiny",
+        "Model": "SAM 2.1 Hiera tiny",
         "Size (M)": "38.9",
         "Speed (FPS)": "47.2",
         "SA-V test (J&F)": "75.0",
         "MOSE val (J&F)": "70.9",
         "LVOS v2 (J&F)": "75.3",
-        "weights_path": "/sam2_weights/sam2_hiera_tiny.pt",
-        "config": "sam2_hiera_t.yaml"
+        "weights_path": "/sam2.1_weights/sam2.1_hiera_tiny.pt",
+        "config": "configs/sam2.1/sam2.1_hiera_t.yaml"
     },
     {
-        "Model": "SAM 2 Hiera small",
+        "Model": "SAM 2.1 Hiera small",
         "Size (M)": "46",
         "Speed (FPS)": "43.3",
         "SA-V test (J&F)": "74.9",
         "MOSE val (J&F)": "71.5",
         "LVOS v2 (J&F)": "76.4",
-        "weights_path": "/sam2_weights/sam2_hiera_small.pt",
-        "config": "sam2_hiera_s.yaml"
+        "weights_path": "/sam2.1_weights/sam2.1_hiera_small.pt",
+        "config": "configs/sam2.1/sam2.1_hiera_s.yaml"
     },
     {
-        "Model": "SAM 2 Hiera base+",
+        "Model": "SAM 2.1 Hiera base+",
         "Size (M)": "80.8",
         "Speed (FPS)": "34.8",
         "SA-V test (J&F)": "74.7",
         "MOSE val (J&F)": "72.8",
         "LVOS v2 (J&F)": "75.8",
-        "weights_path": "/sam2_weights/sam2_hiera_base_plus.pt",
-        "config": "sam2_hiera_b+.yaml"
+        "weights_path": "/sam2.1_weights/sam2.1_hiera_base_plus.pt",
+        "config": "configs/sam2.1/sam2.1_hiera_b+.yaml"
     },
     {
-        "Model": "SAM 2 Hiera large",
+        "Model": "SAM 2.1 Hiera large",
         "Size (M)": "224.4",
         "Speed (FPS)": "24.2",
         "SA-V test (J&F)": "76.0",
         "MOSE val (J&F)": "74.6",
         "LVOS v2 (J&F)": "79.8",
-        "weights_path": "/sam2_weights/sam2_hiera_large.pt",
-        "config": "sam2_hiera_l.yaml"
+        "weights_path": "/sam2.1_weights/sam2.1_hiera_large.pt",
+        "config": "configs/sam2.1/sam2.1_hiera_l.yaml"
     }
 ]

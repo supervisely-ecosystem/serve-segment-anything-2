@@ -17,7 +17,8 @@ from supervisely.nn.inference.interactive_segmentation import functional
 from supervisely.sly_logger import logger
 from supervisely.imaging import image as sly_image
 from supervisely.io.fs import silent_remove
-from supervisely._utils import rand_str
+from supervisely._utils import rand_str, is_debug_with_sly_net
+import supervisely.app.development as sly_app_development
 from supervisely.app.content import get_data_dir
 from supervisely.app.widgets import Switch, Field
 from sam2.build_sam import build_sam2, build_sam2_video_predictor
@@ -95,6 +96,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         if device != "cpu":
             if device == "cuda":
                 torch.cuda.set_device(0)
+                torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
+                if torch.cuda.get_device_properties(0).major >= 8:
+                    torch.backends.cuda.matmul.allow_tf32 = True
+                    torch.backends.cudnn.allow_tf32 = True
             else:
                 torch.cuda.set_device(int(device[-1]))
             torch_device = torch.device(device)
@@ -886,6 +891,15 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 sly.fs.clean_dir(f"prompts/{video_id}")
             sly.logger.info("Successfully finished tracking process")
 
+
+if is_debug_with_sly_net():
+    team_id = sly.env.team_id()
+    original_dir = os.getcwd()
+    sly_app_development.supervisely_vpn_network(action="up")
+    task = sly_app_development.create_debug_task(
+        team_id, port="8000", update_status=True
+    )
+    os.chdir(original_dir)
 
 m = SegmentAnything2(
     use_gui=True,
