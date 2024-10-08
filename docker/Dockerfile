@@ -15,7 +15,8 @@ RUN SAM2_BUILD_ALLOW_ERRORS=0 pip3 install -v -e ".[demo]"
 RUN python3 setup.py clean --all
 RUN python3 setup.py build_ext --inplace
 
-RUN pip3 install git+https://github.com/supervisely/supervisely.git@server-healthchecks-and-cache-error-fix
+# RUN pip3 install git+https://github.com/supervisely/supervisely.git@server-healthchecks-and-cache-error-fix
+RUN pip3 install supervisely==6.73.203
                                                                               
 RUN apt-get install ffmpeg libgeos-dev libsm6 libxext6 libexiv2-dev libxrender-dev libboost-all-dev -y
 RUN pip3 install opencv-python
@@ -31,4 +32,4 @@ RUN wget -O /sam2_weights/sam2.1_hiera_small.pt "${SAM2p1_BASE_URL}/sam2.1_hiera
 RUN wget -O /sam2_weights/sam2.1_hiera_base_plus.pt "${SAM2p1_BASE_URL}/sam2.1_hiera_base_plus.pt"
 RUN wget -O /sam2_weights/sam2.1_hiera_large.pt "${SAM2p1_BASE_URL}/sam2.1_hiera_large.pt"
 
-LABEL python_sdk_version=6.73.171
+LABEL python_sdk_version=6.73.203
