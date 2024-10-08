@@ -23,13 +23,13 @@ RUN pip3 install opencv-python
 
 RUN pip3 install mock==5.1.0
 
-RUN mkdir sam2.1_weights
-RUN mkdir /sam2.1_weights
+# Create directory for SAM weights
+RUN mkdir -p /sam2.1_weights
 
 # Download SAM 2.1 checkpoints
-RUN curl -o /sam2_weights/sam2.1_hiera_tiny.pt "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt"
-RUN curl -o /sam2_weights/sam2.1_hiera_small.pt "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt"
-RUN curl -o /sam2_weights/sam2.1_hiera_base_plus.pt "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt"
-RUN curl -o /sam2_weights/sam2.1_hiera_large.pt "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt"
+RUN curl -L -o /sam2.1_weights/sam2.1_hiera_tiny.pt "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt"
+RUN curl -L -o /sam2.1_weights/sam2.1_hiera_small.pt "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt"
+RUN curl -L -o /sam2.1_weights/sam2.1_hiera_base_plus.pt "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt"
+RUN curl -L -o /sam2.1_weights/sam2.1_hiera_large.pt "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt"
 
 LABEL python_sdk_version=6.73.203
