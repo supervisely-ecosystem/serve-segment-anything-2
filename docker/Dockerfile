@@ -23,6 +23,14 @@ RUN pip install opencv-python
 RUN pip3 install mock==5.1.0
 
 RUN mkdir -p sam2.1_weights
+
+# Download SAM 2.1 checkpoints
+ENV SAM2p1_BASE_URL="https://dl.fbaipublicfiles.com/segment_anything_2/092824"
+RUN wget -O /sam2_weights/sam2.1_hiera_tiny.pt "${SAM2p1_BASE_URL}/sam2.1_hiera_tiny.pt"
+RUN wget -O /sam2_weights/sam2.1_hiera_small.pt "${SAM2p1_BASE_URL}/sam2.1_hiera_small.pt"
+RUN wget -O /sam2_weights/sam2.1_hiera_base_plus.pt "${SAM2p1_BASE_URL}/sam2.1_hiera_base_plus.pt"
+RUN wget -O /sam2_weights/sam2.1_hiera_large.pt "${SAM2p1_BASE_URL}/sam2.1_hiera_large.pt"
+
 ADD sam2.1_weights /sam2.1_weights/
 
 LABEL python_sdk_version=6.73.171
