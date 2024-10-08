@@ -31,6 +31,4 @@ RUN wget -O /sam2_weights/sam2.1_hiera_small.pt "${SAM2p1_BASE_URL}/sam2.1_hiera
 RUN wget -O /sam2_weights/sam2.1_hiera_base_plus.pt "${SAM2p1_BASE_URL}/sam2.1_hiera_base_plus.pt"
 RUN wget -O /sam2_weights/sam2.1_hiera_large.pt "${SAM2p1_BASE_URL}/sam2.1_hiera_large.pt"
 
-ADD sam2.1_weights /sam2.1_weights/
-
 LABEL python_sdk_version=6.73.171
