@@ -15,10 +15,10 @@ RUN SAM2_BUILD_ALLOW_ERRORS=0 pip3 install -v -e ".[demo]"
 RUN python3 setup.py clean --all
 RUN python3 setup.py build_ext --inplace
 
-RUN python3 -m pip install git+https://github.com/supervisely/supervisely.git@server-healthchecks-and-cache-error-fix
-
+RUN pip3 install git+https://github.com/supervisely/supervisely.git@server-healthchecks-and-cache-error-fix
+                                                                              
 RUN apt-get install ffmpeg libgeos-dev libsm6 libxext6 libexiv2-dev libxrender-dev libboost-all-dev -y
-RUN pip install opencv-python
+RUN pip3 install opencv-python
 
 RUN pip3 install mock==5.1.0
 
