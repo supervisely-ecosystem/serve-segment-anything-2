@@ -20,10 +20,8 @@ RUN pip3 install supervisely==6.73.203
                                                                               
 RUN apt-get install ffmpeg libgeos-dev libsm6 libxext6 libexiv2-dev libxrender-dev libboost-all-dev -y
 RUN pip3 install opencv-python
-
 RUN pip3 install mock==5.1.0
 
-# Create directory for SAM weights
 RUN mkdir -p /sam2.1_weights
 
 # Download SAM 2.1 checkpoints
