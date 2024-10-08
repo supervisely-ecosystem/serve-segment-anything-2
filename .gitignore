@@ -1,4 +1,4 @@
-sam2_weights/
+sam2.1_weights/
 supervisely.env
 debug.env
 **/__pycache__/
