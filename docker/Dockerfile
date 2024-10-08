@@ -6,8 +6,8 @@ RUN apt-get install -y git
 RUN pip3 install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu121
 RUN pip3 install packaging==22.0
 
-ENV TORCH_CUDA_ARCH_LIST "8.6 8.9"
-ENV CUDA_HOME /usr/local/cuda-12.1
+ENV TORCH_CUDA_ARCH_LIST="8.6 8.9"
+ENV CUDA_HOME="/usr/local/cuda-12.1"
 
 RUN git clone https://github.com/facebookresearch/sam2.git
 WORKDIR /sam2
