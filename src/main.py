@@ -411,7 +411,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         cy = int((moments["m01"] + 1e-7) / (moments["m00"] + 1e-7))
         return [cx, cy]
 
-    def generate_artificial_prompt(self, bitmap):
+    def generate_artificial_prompt(self, bitmap, frame_np):
         # generate point prompts
         mask = bitmap.data
         origin_row, origin_col = bitmap.origin.row, bitmap.origin.col
@@ -432,11 +432,26 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             # generate box prompt
             rectangle = bitmap.to_bbox()
             padding = 0.03
+            # extract original size
+            original_w, original_h = rectangle.width, rectangle.height
+            center = (rectangle.center.col, rectangle.center.row)
+            # apply padding
+            padded_w, padded_h = (1 + padding) * original_w, (1 + padding) * original_h
+            padded_left = center[0] - (round(padded_w / 2))
+            padded_top = center[1] - (round(padded_h / 2))
+            padded_right = center[0] + (round(padded_w / 2))
+            padded_bottom = center[1] + (round(padded_h / 2))
+            # check if padded bbox is not out of image bounds
+            image_h, image_w = frame_np.shape[0], frame_np.shape[1]
+            padded_left = max(1, padded_left)
+            padded_top = max(1, padded_top)
+            padded_right = min(image_w - 1, padded_right)
+            padded_bottom = min(image_h - 1, padded_bottom)
             bbox = [
-                rectangle.left * (1 - padding),
-                rectangle.top * (1 - padding),
-                rectangle.right * (1 + padding),
-                rectangle.bottom * (1 + padding),
+                padded_left,
+                padded_top,
+                padded_right,
+                padded_bottom,
             ]
             prompt["bbox"] = bbox
         return prompt
@@ -802,18 +817,17 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         figure_prompt = frame_prompts[bbox_str]
                         if self.use_bbox.is_switched():
                             top, left, bottom, right = bbox_str.split("-")
-                            padding = 0.03
                             bbox = [
-                                int(left) * (1 - padding),
-                                int(top) * (1 - padding),
-                                int(right) * (1 + padding),
-                                int(bottom) * (1 + padding),
+                                int(left),
+                                int(top),
+                                int(right),
+                                int(bottom),
                             ]
                             figure_prompt["bbox"] = bbox
                     except Exception:
                         mode = "artificial clicks"
                 if mode == "artificial clicks":
-                    figure_prompt = self.generate_artificial_prompt(geometry)
+                    figure_prompt = self.generate_artificial_prompt(geometry, frame_np)
                 figure_data = {
                     "figure_id": figure_id,
                     "object_id": object_id,
