@@ -1,7 +1,7 @@
 <div align="center" markdown>
 <img src="https://github.com/user-attachments/assets/642ee655-2e73-4d59-8d45-411e2cedac24"/>  
 
-# Serve Segment Anything Model 2
+# Serve Segment Anything Model 2.1
   
 <p align="center">
   <a href="#Overview">Overview</a> •

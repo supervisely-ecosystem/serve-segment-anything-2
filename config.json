@@ -1,5 +1,5 @@
 {
-    "name": "Serve Segment Anything 2",
+    "name": "Serve Segment Anything 2.1",
     "type": "app",
     "version": "2.0.0",
     "description": "Deploy SAM 2 model as REST API service",
