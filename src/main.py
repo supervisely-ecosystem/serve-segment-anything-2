@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import functools
 import json
 import os
@@ -27,7 +28,7 @@ from supervisely.app.content import get_data_dir
 from supervisely.app.widgets import Field, Switch
 from supervisely.imaging import image as sly_image
 from supervisely.imaging.color import generate_rgb
-from supervisely.io.fs import mkdir, silent_remove
+from supervisely.io.fs import mkdir, silent_remove, remove_dir
 from supervisely.nn.inference.interactive_segmentation import functional
 from supervisely.sly_logger import logger
 
@@ -529,19 +530,27 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     progress.current,
                     progress.total
                 )
+
+        def _download_images_batch(frame_indexes: List[int]):
+            executor = ThreadPoolExecutor(max_workers=5)
+            for frame_index in frame_indexes:
+                executor.submit(self.cache.download_frame, api, video_id, frame_index)
+        _download_images_batch(list(range(start_frame, start_frame + n_frames + 1)))
+
         notify_thread = threading.Thread(target=_notify_loop, daemon=True)
         notify_thread.start()
         video_predictor = None
         inference_state = None
         upload_thread = None
+        temp_frames_dir = f"frames/{track_id}"
         try:
             # save frames to directory
             api.logger.debug("Saving frames to directory...", extra=log_extra)
-            temp_frames_dir = f"frames/{track_id}"
             mkdir(temp_frames_dir, remove_content_if_exists=True)
-            for i, frame in enumerate(self.cache.download_frames(api, video_id, frame_indexes=list(range(start_frame, start_frame + n_frames + 1)), return_images=True)):
+            for i, frame_index in enumerate(range(start_frame, start_frame + n_frames + 1)):
+                frame = self.cache.download_frame(api, video_id, frame_index)
                 sly_image.write(f"{temp_frames_dir}/{i}.jpg", frame)
-                api.logger.debug("Saved frame to directory %d/%d", i+1, n_frames+1, extra={**log_extra, "frame_index": start_frame + i})
+                api.logger.debug("Saved frame to directory %d/%d", i+1, n_frames+1, extra={**log_extra, "frame_index": frame_index})
                 progress.iter_done()
 
             # initialize model1
@@ -646,6 +655,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if notify_thread.is_alive():
                 notify_stop.set()
                 notify_thread.join()
+            remove_dir(temp_frames_dir)
 
 
     def _track_api(self, api: sly.Api, context: dict):
