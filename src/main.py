@@ -579,7 +579,28 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     box=bbox,
                 )
 
+            empty_mask_notified = False
+
             def _upload_single(frame_index, object_id, mask):
+                nonlocal empty_mask_notified
+                mask = mask.astype(bool)
+                if np.all(~mask):
+                    logger.debug(
+                        "Empty mask detected", extra={**log_extra, frame_index: frame_index}
+                    )
+                    if not empty_mask_notified:
+                        try:
+                            message = "The model has predicted empty mask"
+                            api.video.notify_tracking_warning(track_id, video_id, message)
+                            empty_mask_notified = True
+                        except Exception as e:
+                            api.logger.warning(
+                                "Unable to notify about empty mask: %s",
+                                str(e),
+                                exc_info=True,
+                                extra=log_extra,
+                            )
+                    return
                 geometry = sly.Bitmap(mask, extra_validation=False)
                 api.video.figure.create(
                     video_id,
