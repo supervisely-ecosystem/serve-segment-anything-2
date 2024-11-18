@@ -622,6 +622,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         notify_stop = threading.Event()
 
         def _notify_loop():
+            _start_frame = start_frame if direction == 1 else end_frame
+            _end_frame = end_frame if direction == 1 else start_frame
             last_notify = 0
             while not notify_stop.is_set():
                 if progress.current > last_notify:
