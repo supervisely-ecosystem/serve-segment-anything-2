@@ -588,7 +588,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 mask = mask.astype(bool)
                 if np.all(~mask):
                     logger.debug(
-                        "Empty mask detected", extra={**log_extra, frame_index: frame_index}
+                        "Empty mask detected", extra={**log_extra, "frame_index": frame_index}
                     )
                     if not empty_mask_notified:
                         try:
