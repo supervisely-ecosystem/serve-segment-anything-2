@@ -469,7 +469,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         return_result: bool = False,
     ):
         video_id = context["videoId"]
-        track_id = context["trackId"]
+        track_id = context.get("trackId", "auto")
         n_frames = context["frames"]
         start_frame = context["frameIndex"]
         figure_ids = context["figureIds"]
