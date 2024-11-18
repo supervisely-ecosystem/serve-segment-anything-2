@@ -743,6 +743,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             upload_error = threading.Event()
 
             def _upload_loop(q: Queue, stop_event: threading.Event, upload_f: callable):
+                _start_frame = start_frame if direction == 1 else end_frame
+                _end_frame = end_frame if direction == 1 else start_frame
                 try:
                     while True:
                         items = []
@@ -757,8 +759,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                             api.video.notify_progress(
                                 track_id,
                                 video_id,
-                                start_frame,
-                                end_frame,
+                                _start_frame,
+                                _end_frame,
                                 progress.total,
                                 progress.total,
                             )
