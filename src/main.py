@@ -160,6 +160,11 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 self.predictor._features = cached_data["features"]
                 self.predictor._orig_hw = cached_data["original_size"]
 
+    def _deserialize_geometry(self, data: dict):
+        geometry_type_str = data["type"]
+        geometry_json = data["data"]
+        return sly.deserialize_geometry(geometry_type_str, geometry_json)
+
     def predict(self, image_path: str, settings: Dict[str, Any]) -> List[sly.nn.PredictionMask]:
         # prepare input data
         input_image = sly.image.read(image_path)
@@ -460,16 +465,109 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         visible = smarttool_input["visible"]
         return crop, positive, negative, visible
 
+    def _track_api(self, api: sly.Api, context: dict):
+        # TODO: Add clicks support
+        video_id = context["videoId"]
+        start_frame = context["frameIndex"]
+        n_frames = context["frames"]
+        input_geometries = context["input_geometries"]
+        direction = 1 if context.get("direction", "forward") == "forward" else -1
+        log_extra = {
+            "video_id": video_id,
+            "start_frame": start_frame,
+            "frames": n_frames,
+            "direction": direction,
+        }
+        sly.logger.info("Starting tracking process...", extra=log_extra)
+        end_frame = start_frame + n_frames * direction
+        frames_indexes = list(range(start_frame, end_frame + direction, step=direction))
+
+        # start background task for caching frames
+        api.logger.debug("Starting cache task for video %s", video_id, extra=log_extra)
+        if self.cache.is_persistent:
+            # if cache is persistent, run cache task for whole video
+            frame_range = None
+        else:
+            # if cache is not persistent, run cache task for range of frames
+            frame_range = [start_frame, end_frame]
+            if direction == -1:
+                frame_range = frame_range[::-1]
+        self.cache.run_cache_task_manually(
+            api,
+            frame_range,
+            video_id=video_id,
+        )
+
+        temp_frames_dir = f"frames/{rand_str(10)}"
+        # save frames to directory
+        api.logger.debug("Saving frames to directory...", extra=log_extra)
+        mkdir(temp_frames_dir, remove_content_if_exists=True)
+        self.cache.download_frames_to_paths(
+            api,
+            video_id,
+            frames_indexes,
+            [f"{temp_frames_dir}/{i}.jpg" for i in range(n_frames + 1)],
+        )
+
+        # initialize model1
+        video_predictor = build_sam2_video_predictor(self.config, self.weights_path)
+        inference_state = video_predictor.init_state(video_path=temp_frames_dir)
+
+        for i, input_geom_data in enumerate(input_geometries):
+            geometry = self._deserialize_geometry(input_geom_data)
+            if not isinstance(geometry, sly.Bitmap) and not isinstance(geometry, sly.Polygon):
+                raise TypeError(f"This app does not support {geometry.geometry_name()} tracking")
+            # convert polygon to bitmap
+            if isinstance(geometry, sly.Polygon):
+                polygon_obj_class = sly.ObjClass("polygon", sly.Polygon)
+                polygon_label = sly.Label(geometry, polygon_obj_class)
+                bitmap_obj_class = sly.ObjClass("bitmap", sly.Bitmap)
+                bitmap_label = polygon_label.convert(bitmap_obj_class)[0]
+                geometry = bitmap_label.geometry
+
+            first_frame = sly_image.read(f"{temp_frames_dir}/0.jpg")
+            prompt = self.generate_artificial_prompt(geometry, first_frame)
+            smarttool_input = (prompt["bbox"], prompt["point_coordinates"], [], True)
+
+            # bbox - ltrb
+            # points - col, row
+            bbox, positive_clicks, negative_clicks, _ = smarttool_input
+            if not self.use_bbox.is_switched():
+                bbox = None
+            video_predictor.add_new_points_or_box(
+                inference_state=inference_state,
+                frame_idx=0,
+                obj_id=i,
+                points=positive_clicks + negative_clicks,
+                labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
+                box=bbox,
+            )
+
+        results = []
+        # run propagation throughout the video
+        for (
+            out_frame_idx,
+            _,
+            out_mask_logits,
+        ) in video_predictor.propagate_in_video(inference_state):
+            # skip first frame prediction
+            if out_frame_idx == 0:
+                continue
+            results.append([])
+            for masks in out_mask_logits:
+                masks = (masks > 0.0).cpu().numpy()
+                sum_mask = np.logical_or.reduce(*masks)
+                geometry = sly.Bitmap(sum_mask, extra_validation=False)
+                results[-1].append({"type": geometry.geometry_name(), "data": geometry.to_json()})
+        return results
+
     def _track(
         self,
         api: sly.Api,
         context: Dict,
-        notify: bool = True,
-        upload: bool = True,
-        return_result: bool = False,
     ):
         video_id = context["videoId"]
-        track_id = context.get("trackId", "auto")
+        track_id = context["trackId"]
         n_frames = context["frames"]
         start_frame = context["frameIndex"]
         figure_ids = context["figureIds"]
@@ -480,6 +578,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             "start_frame": start_frame,
             "frames": n_frames,
             "figure_ids": figure_ids,
+            "direction": direction,
         }
         sly.logger.info("Starting tracking process...", extra=log_extra)
         end_frame = start_frame + n_frames * direction
@@ -492,18 +591,17 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         api.logger.debug("Starting cache task for video %s", video_id, extra=log_extra)
         if self.cache.is_persistent:
             # if cache is persistent, run cache task for whole video
-            self.cache.run_cache_task_manually(
-                api,
-                None,
-                video_id=video_id,
-            )
+            frame_range = None
         else:
             # if cache is not persistent, run cache task for range of frames
-            self.cache.run_cache_task_manually(
-                api,
-                [start_frame, start_frame + n_frames],
-                video_id=video_id,
-            )
+            frame_range = [start_frame, end_frame]
+            if direction == -1:
+                frame_range = frame_range[::-1]
+        self.cache.run_cache_task_manually(
+            api,
+            frame_range,
+            video_id=video_id,
+        )
 
         # load figures
         api.logger.debug("Loading figures...", extra=log_extra)
@@ -514,8 +612,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         notify_stop = threading.Event()
 
         def _notify_loop():
-            if not notify:
-                return
             last_notify = 0
             while not notify_stop.is_set():
                 if progress.current > last_notify:
@@ -548,18 +644,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     extra={**log_extra},
                 )
                 progress.iter_done()
-
-        def _unwrap_results(results: Dict):
-            """
-            Unwrap results from the dictionary
-            Returns NxK masks: N=number of frames, K=number of objects
-            """
-            unwrapped_results = []
-            for frame_index in range(n_frames):
-                unwrapped_results.append([])
-                for figure_id in figure_ids:
-                    unwrapped_results[-1].append(results[frame_index][figure_id])
-            return unwrapped_results
 
         try:
             # save frames to directory
@@ -595,7 +679,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 bbox, positive_clicks, negative_clicks, _ = smarttool_input
                 if not self.use_bbox.is_switched():
                     bbox = None
-                _, out_obj_ids, _ = video_predictor.add_new_points_or_box(
+                video_predictor.add_new_points_or_box(
                     inference_state=inference_state,
                     frame_idx=0,
                     obj_id=figure.id,
@@ -606,29 +690,14 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
             empty_mask_notified = False
 
-            results = {}
-
-            def _add_result_single(frame_index, figure_id, mask):
-                mask = mask.astype(bool)
-                if np.all(~mask):
-                    results.setdefault(frame_index, {})[figure_id] = None
-                    return
-                geometry = sly.Bitmap(mask, extra_validation=False)
-                results.setdefault(frame_index, {})[figure_id] = {
-                    "type": geometry.geometry_name(),
-                    "data": geometry.to_json(),
-                }
-
             def _upload_single(frame_index, figure_id, mask):
                 nonlocal empty_mask_notified
-                if not upload:
-                    return
                 mask = mask.astype(bool)
                 if np.all(~mask):
                     logger.debug(
                         "Empty mask detected", extra={**log_extra, "frame_index": frame_index}
                     )
-                    if notify and not empty_mask_notified:
+                    if not empty_mask_notified:
                         try:
                             message = "The model has predicted empty mask"
                             api.video.notify_tracking_warning(track_id, video_id, message)
@@ -685,14 +754,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     upload_error.set()
                     raise
 
-            def _upload_f(*args, **kwargs):
-                if upload:
-                    _upload_single(*args, **kwargs)
-                if return_result:
-                    _add_result_single(*args, **kwargs)
-
             upload_thread = threading.Thread(
-                target=_upload_loop, args=(upload_queue, upload_stop, _upload_f), daemon=True
+                target=_upload_loop, args=(upload_queue, upload_stop, _upload_single), daemon=True
             )
             upload_thread.start()
 
@@ -716,8 +779,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             raise
         else:
             sly.logger.info("Successfully finished tracking process", extra=log_extra)
-            if return_result:
-                return _unwrap_results(results)
         finally:
             if video_predictor is not None and inference_state is not None:
                 # reset predictor state
@@ -729,9 +790,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 notify_stop.set()
                 notify_thread.join()
             remove_dir(temp_frames_dir)
-
-    def _track_api(self, api: sly.Api, context: dict):
-        return self._track(api, context, notify=False, upload=False, return_result=True)
 
     def serve(self):
         super().serve()
