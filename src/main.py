@@ -566,7 +566,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             results.append([])
             for masks in out_mask_logits:
                 masks = (masks > 0.0).cpu().numpy()
-                sum_mask = np.logical_or.reduce(*masks)
+                sum_mask = np.any(masks, axis=0)
                 geometry = sly.Bitmap(sum_mask, extra_validation=False)
                 results[-1].append({"type": geometry.geometry_name(), "data": geometry.to_json()})
         return results
