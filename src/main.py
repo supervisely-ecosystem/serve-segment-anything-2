@@ -1,36 +1,35 @@
-import os
-from queue import Queue
-import numpy as np
-import torch
-import cv2
-import threading
-import time
-from cacheout import Cache
-from dotenv import load_dotenv
-from typing import Literal
-from typing import List, Any, Dict
-from fastapi import Response, Request, status, BackgroundTasks
-from pathlib import Path
-from cachetools import LRUCache
-import supervisely as sly
-from supervisely.imaging.color import generate_rgb
-from supervisely.nn.inference.interactive_segmentation import functional
-from supervisely.sly_logger import logger
-from supervisely.imaging import image as sly_image
-from supervisely.io.fs import silent_remove, mkdir
-from supervisely._utils import rand_str, is_debug_with_sly_net
-import supervisely.app.development as sly_app_development
-from supervisely.app.content import get_data_dir
-from supervisely.app.widgets import Switch, Field
-from sam2.build_sam import build_sam2, build_sam2_video_predictor
-from sam2.sam2_image_predictor import SAM2ImagePredictor
-from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 import functools
 import json
+import os
+import threading
+import time
 import traceback
-from PIL import Image
-import mock
+from pathlib import Path
+from queue import Queue
+from typing import Any, Dict, List, Literal
 
+import cv2
+import mock
+import numpy as np
+import supervisely as sly
+import supervisely.app.development as sly_app_development
+import torch
+from cacheout import Cache
+from cachetools import LRUCache
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, Request, Response, status
+from PIL import Image
+from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+from sam2.build_sam import build_sam2, build_sam2_video_predictor
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+from supervisely._utils import is_debug_with_sly_net, rand_str
+from supervisely.app.content import get_data_dir
+from supervisely.app.widgets import Field, Switch
+from supervisely.imaging import image as sly_image
+from supervisely.imaging.color import generate_rgb
+from supervisely.io.fs import mkdir, silent_remove
+from supervisely.nn.inference.interactive_segmentation import functional
+from supervisely.sly_logger import logger
 
 load_dotenv("supervisely.env")
 load_dotenv("debug.env")
@@ -577,7 +576,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
                     box=bbox,
                 )
-        
+
             def _upload_single(frame_index, object_id, mask):
                 geometry = sly.Bitmap(mask, extra_validation=False)
                 api.video.figure.create(
@@ -800,38 +799,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     point_coordinates,
                     point_labels,
                 )
-                if "video" in smtool_state:
-                    # save prompt to json file
-                    video_id = smtool_state["video"]["video_id"]
-                    if not os.path.exists(f"prompts/{video_id}"):
-                        os.makedirs(f"prompts/{video_id}")
-                    bbox_str = (
-                        f"{crop[0]['y']}-{crop[0]['x']}-{crop[1]['y']}-{crop[1]['x']}"
-                    )
-                    prompt = {
-                        "0": {
-                            bbox_str: {
-                                "point_coordinates": point_coordinates,
-                                "point_labels": point_labels,
-                            },
-                        }
-                    }
-                    prompt_filepath = f"prompts/{video_id}/point_coordinates.json"
-                    if os.path.exists(prompt_filepath):
-                        with open(prompt_filepath, "r") as file:
-                            previous_prompt = json.load(file)
-                        if "0" in previous_prompt:
-                            if not bbox_str in previous_prompt["0"]:
-                                prompt["0"] = {
-                                    **prompt["0"],
-                                    **previous_prompt["0"],
-                                }
-                        else:
-                            prompt = {**previous_prompt, **prompt}
-
-                    with open(prompt_filepath, "w") as file:
-                        json.dump(prompt, file)
-
                 pred_mask = self.predict(image_path, settings)[0].mask
             finally:
                 logger.debug("Predict done")
@@ -839,43 +806,17 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 silent_remove(image_path)
 
             if pred_mask.any():
-                bitmap = sly.Bitmap(pred_mask)
-                # crop bitmap
-                bitmap = bitmap.crop(sly.Rectangle(*settings["bbox_coordinates"]))[0]
-                # adapt bitmap to crop coordinates
-                bitmap_data = bitmap.data
-                bitmap_origin = sly.PointLocation(
-                    bitmap.origin.row - crop[0]["y"],
-                    bitmap.origin.col - crop[0]["x"],
-                )
-                bitmap = sly.Bitmap(data=bitmap_data, origin=bitmap_origin)
-
-                if "video" in smtool_state:
-                    bitmap_center = self.get_bitmap_center(bitmap)
-                    bitmap_center_str = f"{bitmap_center[0]}-{bitmap_center[1]}"
-                    bitmap_data = {
-                        "0": {
-                            bitmap_center_str: bbox_str,
-                        }
-                    }
-                    bitmap_data_path = f"prompts/{video_id}/bitmap2bbox.json"
-                    if os.path.exists(bitmap_data_path):
-                        with open(bitmap_data_path, "r") as file:
-                            previous_bitmap_data = json.load(file)
-                        if "0" in previous_bitmap_data:
-                            if not bitmap_center_str in previous_bitmap_data["0"]:
-                                bitmap_data["0"] = {
-                                    **bitmap_data["0"],
-                                    **previous_bitmap_data["0"],
-                                }
-                    with open(bitmap_data_path, "w") as file:
-                        json.dump(bitmap_data, file)
-
-                bitmap_origin, bitmap_data = functional.format_bitmap(bitmap, crop)
+                t, l, b, r = settings["bbox_coordinates"]
+                t = max(0, t)
+                l = max(0, l)
+                b = min(pred_mask.shape[0], b)
+                r = min(pred_mask.shape[1], r)
+                bitmap_data = pred_mask[t:b, l:r]
+                bitmap = sly.Bitmap(bitmap_data, origin=sly.PointLocation(t, l), extra_validation=False)
                 logger.debug(f"smart_segmentation inference done!")
                 response = {
-                    "origin": bitmap_origin,
-                    "bitmap": bitmap_data,
+                    "origin": {"x": bitmap.origin.col, "y": bitmap.origin.row},
+                    "bitmap": bitmap.data_2_base64(bitmap.data),
                     "success": True,
                     "error": None,
                 }
