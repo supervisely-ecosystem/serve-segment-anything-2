@@ -42,6 +42,14 @@ UPLOAD_SLEEP_TIME = 0.1
 NOTIFY_SLEEP_TIME = 0.1
 
 
+def notqdm(iterable, *args, **kwargs):
+    """
+    replacement for tqdm that just passes back the iterable
+    useful to silence `tqdm` in tests
+    """
+    return iterable
+
+
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
     def add_content_to_pretrained_tab(self, gui):
@@ -465,6 +473,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         visible = smarttool_input["visible"]
         return crop, positive, negative, visible
 
+    @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
+    @mock.patch("sam2.utils.misc.tqdm", notqdm)
     def _track_api(self, api: sly.Api, context: dict):
         # TODO: Add clicks support
         video_id = context["videoId"]
@@ -774,7 +784,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         raise RuntimeError("Tracking is stopped due to an error in upload loop")
                     masks = (masks > 0.0).cpu().numpy()
                     for i, mask in enumerate(masks):
-                        upload_queue.put((frame_index, figure_id, mask, i==0))
+                        upload_queue.put((frame_index, figure_id, mask, i == 0))
         except Exception:
             raise
         else:
@@ -1016,13 +1026,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 return value
 
             return wrapper
-
-        def notqdm(iterable, *args, **kwargs):
-            """
-            replacement for tqdm that just passes back the iterable
-            useful to silence `tqdm` in tests
-            """
-            return iterable
 
         @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
         @mock.patch("sam2.utils.misc.tqdm", notqdm)
