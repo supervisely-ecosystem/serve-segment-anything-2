@@ -733,8 +733,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                             items.append(q.get_nowait())
                         if len(items) > 0:
                             for item in items:
-                                upload_f(*item)
-                            progress.iters_done(len(items))
+                                upload_f(*item[:3])
+                            progress.iters_done(sum(1 for item in items if item[3]))
                             continue
                         if stop_event.is_set():
                             api.video.notify_progress(
@@ -773,8 +773,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     if upload_error.is_set():
                         raise RuntimeError("Tracking is stopped due to an error in upload loop")
                     masks = (masks > 0.0).cpu().numpy()
-                    for mask in masks:
-                        upload_queue.put((frame_index, figure_id, mask))
+                    for i, mask in enumerate(masks):
+                        upload_queue.put((frame_index, figure_id, mask, i==0))
         except Exception:
             raise
         else:
