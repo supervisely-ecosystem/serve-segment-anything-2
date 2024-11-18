@@ -1,10 +1,10 @@
-from concurrent.futures import ThreadPoolExecutor
 import functools
 import json
 import os
 import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from queue import Queue
 from typing import Any, Dict, List, Literal
@@ -28,7 +28,7 @@ from supervisely.app.content import get_data_dir
 from supervisely.app.widgets import Field, Switch
 from supervisely.imaging import image as sly_image
 from supervisely.imaging.color import generate_rgb
-from supervisely.io.fs import mkdir, silent_remove, remove_dir
+from supervisely.io.fs import mkdir, remove_dir, silent_remove
 from supervisely.nn.inference.interactive_segmentation import functional
 from supervisely.sly_logger import logger
 
@@ -40,6 +40,7 @@ debug_session = bool(os.environ.get("DEBUG_SESSION", False))
 model_data_path = os.path.join(root_source_path, "models", "models.json")
 UPLOAD_SLEEP_TIME = 0.1
 NOTIFY_SLEEP_TIME = 0.1
+
 
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
@@ -159,9 +160,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 self.predictor._features = cached_data["features"]
                 self.predictor._orig_hw = cached_data["original_size"]
 
-    def predict(
-        self, image_path: str, settings: Dict[str, Any]
-    ) -> List[sly.nn.PredictionMask]:
+    def predict(self, image_path: str, settings: Dict[str, Any]) -> List[sly.nn.PredictionMask]:
         # prepare input data
         input_image = sly.image.read(image_path)
         # list for storing preprocessed masks
@@ -181,9 +180,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 crop_n_layers=settings["crop_n_layers"],
                 crop_nms_thresh=settings["crop_nms_thresh"],
                 crop_overlap_ratio=settings["crop_overlap_ratio"],
-                crop_n_points_downscale_factor=settings[
-                    "crop_n_points_downscale_factor"
-                ],
+                crop_n_points_downscale_factor=settings["crop_n_points_downscale_factor"],
                 min_mask_region_area=settings["min_mask_region_area"],
                 output_mode=settings["output_mode"],
             )
@@ -199,9 +196,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     self._model_meta = self._model_meta.add_obj_class(new_class)
                 # get predicted mask
                 mask = mask["segmentation"]
-                predictions.append(
-                    sly.nn.PredictionMask(class_name=class_name, mask=mask)
-                )
+                predictions.append(sly.nn.PredictionMask(class_name=class_name, mask=mask))
         elif settings["mode"] == "bbox":
             # get bbox coordinates
             if "rectangle" not in settings:
@@ -309,17 +304,13 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if (
                 settings["input_image_id"] in self.model_cache
                 and (
-                    self.model_cache.get(settings["input_image_id"]).get(
-                        "previous_bbox"
-                    )
+                    self.model_cache.get(settings["input_image_id"]).get("previous_bbox")
                     == bbox_coordinates
                 ).all()
                 and self.previous_image_id == settings["input_image_id"]
             ):
                 # get mask from previous predicton and use at as an input for new prediction
-                mask_input = self.model_cache.get(settings["input_image_id"])[
-                    "mask_input"
-                ]
+                mask_input = self.model_cache.get(settings["input_image_id"])["mask_input"]
                 if len(point_labels) > 1:
                     masks, scores, logits = self.predictor.predict(
                         point_coords=point_coordinates,
@@ -347,9 +338,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 padw = self.predictor.model.image_encoder.img_size - w
                 mask_input = np.pad(mask_input, ((0, padh), (0, padw)))
                 # downscale to 256x256
-                mask_input = cv2.resize(
-                    mask_input, (256, 256), interpolation=cv2.INTER_LINEAR
-                )
+                mask_input = cv2.resize(mask_input, (256, 256), interpolation=cv2.INTER_LINEAR)
                 # put values
                 mask_input = mask_input.astype(float)
                 mask_input[mask_input > 0] = 20
@@ -457,31 +446,36 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             ]
             prompt["bbox"] = bbox
         return prompt
-    
+
     def get_smarttool_input(self, figure: sly.FigureInfo):
         if figure.meta is None:
             return None
         smarttool_input = figure.meta.get("smartToolInput", None)
         if smarttool_input is None:
             return None
-        crop=smarttool_input["crop"]
-        crop=[*crop[0], *crop[1]]
-        positive=smarttool_input["positive"]
-        negative=smarttool_input["negative"]
-        visible=smarttool_input["visible"]
+        crop = smarttool_input["crop"]
+        crop = [*crop[0], *crop[1]]
+        positive = smarttool_input["positive"]
+        negative = smarttool_input["negative"]
+        visible = smarttool_input["visible"]
         return crop, positive, negative, visible
-    
 
-    def _track(self, api: sly.Api, context:Dict):
+    def _track(self, api: sly.Api, context: Dict):
         video_id = context["videoId"]
         track_id = context["trackId"]
         n_frames = context["frames"]
         start_frame = context["frameIndex"]
         figure_ids = context["figureIds"]
-        log_extra = {"video_id": video_id, "track_id": track_id, "start_frame": start_frame, "frames": n_frames, "figure_ids": figure_ids}
+        log_extra = {
+            "video_id": video_id,
+            "track_id": track_id,
+            "start_frame": start_frame,
+            "frames": n_frames,
+            "figure_ids": figure_ids,
+        }
         sly.logger.info("Starting tracking process...", extra=log_extra)
         end_frame = start_frame + n_frames
-        progress = sly.Progress("Tracking progress", total_cnt=n_frames*2 + 1)
+        progress = sly.Progress("Tracking progress", total_cnt=n_frames * 2 + 1)
 
         # start background task for caching frames
         api.logger.debug("Starting cache task for video %s", video_id, extra=log_extra)
@@ -497,7 +491,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.cache.run_cache_task_manually(
                 api,
                 [start_frame, start_frame + n_frames],
-                video_id =video_id,
+                video_id=video_id,
             )
 
         # load figures
@@ -507,35 +501,20 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         figure_id_to_object_id = {figure.id: figure.object_id for figure in figures}
 
         notify_stop = threading.Event()
+
         def _notify_loop():
             last_notify = 0
             while not notify_stop.is_set():
                 if progress.current > last_notify:
                     api.video.notify_progress(
-                        track_id,
-                        video_id,
-                        start_frame,
-                        end_frame,
-                        progress.current,
-                        progress.total
+                        track_id, video_id, start_frame, end_frame, progress.current, progress.total
                     )
                     last_notify = progress.current
                 time.sleep(NOTIFY_SLEEP_TIME)
             if progress.current > last_notify:
                 api.video.notify_progress(
-                    track_id,
-                    video_id,
-                    start_frame,
-                    end_frame,
-                    progress.current,
-                    progress.total
+                    track_id, video_id, start_frame, end_frame, progress.current, progress.total
                 )
-
-        def _download_images_batch(frame_indexes: List[int]):
-            executor = ThreadPoolExecutor(max_workers=5)
-            for frame_index in frame_indexes:
-                executor.submit(self.cache.download_frame, api, video_id, frame_index)
-        _download_images_batch(list(range(start_frame, start_frame + n_frames + 1)))
 
         notify_thread = threading.Thread(target=_notify_loop, daemon=True)
         notify_thread.start()
@@ -543,15 +522,31 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         inference_state = None
         upload_thread = None
         temp_frames_dir = f"frames/{track_id}"
+        save_frames_current = 0
+
+        def _progress_cb(cnt=1):
+            nonlocal save_frames_current
+            for _ in range(cnt):
+                save_frames_current += 1
+                api.logger.debug(
+                    "Saving frames to directory: %d/%d",
+                    save_frames_current,
+                    n_frames + 1,
+                    extra={**log_extra},
+                )
+                progress.iter_done()
+
         try:
             # save frames to directory
             api.logger.debug("Saving frames to directory...", extra=log_extra)
             mkdir(temp_frames_dir, remove_content_if_exists=True)
-            for i, frame_index in enumerate(range(start_frame, start_frame + n_frames + 1)):
-                frame = self.cache.download_frame(api, video_id, frame_index)
-                sly_image.write(f"{temp_frames_dir}/{i}.jpg", frame)
-                api.logger.debug("Saved frame to directory %d/%d", i+1, n_frames+1, extra={**log_extra, "frame_index": frame_index})
-                progress.iter_done()
+            self.cache.download_frames_to_paths(
+                api,
+                video_id,
+                list(range(start_frame, start_frame + n_frames + 1)),
+                [f"{temp_frames_dir}/{i}.jpg" for i in range(n_frames + 1)],
+                progress_cb=_progress_cb,
+            )
 
             # initialize model1
             video_predictor = build_sam2_video_predictor(self.config, self.weights_path)
@@ -564,9 +559,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     )
                     continue
                 first_frame = sly_image.read(f"{temp_frames_dir}/0.jpg")
-                geometry = sly.deserialize_geometry(
-                    figure.geometry_type, figure.geometry
-                )
+                geometry = sly.deserialize_geometry(figure.geometry_type, figure.geometry)
                 smarttool_input = self.get_smarttool_input(figure)
                 if smarttool_input is None:
                     prompt = self.generate_artificial_prompt(geometry, first_frame)
@@ -597,10 +590,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     track_id,
                 )
 
-
             upload_queue = Queue()
             upload_stop = threading.Event()
             upload_error = threading.Event()
+
             def _upload_loop(q: Queue, stop_event: threading.Event):
                 try:
                     while True:
@@ -613,15 +606,26 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                             progress.iters_done(len(items))
                             continue
                         if stop_event.is_set():
-                            api.video.notify_progress(track_id, video_id, start_frame, end_frame, progress.total, progress.total)
+                            api.video.notify_progress(
+                                track_id,
+                                video_id,
+                                start_frame,
+                                end_frame,
+                                progress.total,
+                                progress.total,
+                            )
                             return
                         time.sleep(UPLOAD_SLEEP_TIME)
                 except Exception as e:
-                    api.logger.error("Error in upload loop: %s", str(e), exc_info=True, extra=log_extra)
+                    api.logger.error(
+                        "Error in upload loop: %s", str(e), exc_info=True, extra=log_extra
+                    )
                     upload_error.set()
                     raise
 
-            upload_thread = threading.Thread(target=_upload_loop, args=(upload_queue, upload_stop), daemon=True)
+            upload_thread = threading.Thread(
+                target=_upload_loop, args=(upload_queue, upload_stop), daemon=True
+            )
             upload_thread.start()
 
             # run propagation throughout the video
@@ -657,7 +661,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 notify_thread.join()
             remove_dir(temp_frames_dir)
 
-
     def _track_api(self, api: sly.Api, context: dict):
         # unused fields:
         context["trackId"] = "auto"
@@ -667,7 +670,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             context["direction"] = "forward"
 
         input_geometries: list = context["input_geometries"]
-
 
     def serve(self):
         super().serve()
@@ -710,12 +712,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 return {"message": "400: Bad request.", "success": False}
 
             # collect clicks
-            uncropped_clicks = [
-                {**click, "is_positive": True} for click in positive_clicks
-            ]
-            uncropped_clicks += [
-                {**click, "is_positive": False} for click in negative_clicks
-            ]
+            uncropped_clicks = [{**click, "is_positive": True} for click in positive_clicks]
+            uncropped_clicks += [{**click, "is_positive": False} for click in negative_clicks]
             clicks = functional.transform_clicks_to_crop(crop, uncropped_clicks)
             is_in_bbox = functional.validate_click_bounds(crop, clicks)
             if not is_in_bbox:
@@ -822,7 +820,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 b = min(pred_mask.shape[0], b)
                 r = min(pred_mask.shape[1], r)
                 bitmap_data = pred_mask[t:b, l:r]
-                bitmap = sly.Bitmap(bitmap_data, origin=sly.PointLocation(t, l), extra_validation=False)
+                bitmap = sly.Bitmap(
+                    bitmap_data, origin=sly.PointLocation(t, l), extra_validation=False
+                )
                 logger.debug(f"smart_segmentation inference done!")
                 response = {
                     "origin": {"x": bitmap.origin.col, "y": bitmap.origin.row},
@@ -957,15 +957,11 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             for figure_id in figure_ids:
                 figure = self.api.video.figure.get_info_by_id(figure_id)
                 if figure.geometry_type != "bitmap":
-                    sly.logger.warn(
-                        "Only geometries of shape mask are available for tracking"
-                    )
+                    sly.logger.warn("Only geometries of shape mask are available for tracking")
                     continue
                 object_id = figure.object_id
                 fig_id2_obj_id[figure_id] = object_id
-                geometry = sly.deserialize_geometry(
-                    figure.geometry_type, figure.geometry
-                )
+                geometry = sly.deserialize_geometry(figure.geometry_type, figure.geometry)
                 if mode == "user clicks":
                     bitmap_center = self.get_bitmap_center(geometry)
                     bitmap_center_str = f"{bitmap_center[0]}-{bitmap_center[1]}"
@@ -1062,8 +1058,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 sly.fs.clean_dir(f"prompts/{video_id}")
             sly.logger.info("Successfully finished tracking process")
 
-        
-
         @server.post("/track-api")
         def track_api(request: Request):
             return self._track_api(request.state.api, request.state.context)
@@ -1073,9 +1067,7 @@ if is_debug_with_sly_net():
     team_id = sly.env.team_id()
     original_dir = os.getcwd()
     sly_app_development.supervisely_vpn_network(action="up")
-    task = sly_app_development.create_debug_task(
-        team_id, port="8000", update_status=True
-    )
+    task = sly_app_development.create_debug_task(team_id, port="8000", update_status=True)
     os.chdir(original_dir)
 
 m = SegmentAnything2(
