@@ -628,13 +628,18 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             while not notify_stop.is_set():
                 if progress.current > last_notify:
                     api.video.notify_progress(
-                        track_id, video_id, start_frame, end_frame, progress.current, progress.total
+                        track_id,
+                        video_id,
+                        _start_frame,
+                        _end_frame,
+                        progress.current,
+                        progress.total,
                     )
                     last_notify = progress.current
                 time.sleep(NOTIFY_SLEEP_TIME)
             if progress.current > last_notify:
                 api.video.notify_progress(
-                    track_id, video_id, start_frame, end_frame, progress.current, progress.total
+                    track_id, video_id, _start_frame, _end_frame, progress.current, progress.total
                 )
 
         notify_thread = threading.Thread(target=_notify_loop, daemon=True)
