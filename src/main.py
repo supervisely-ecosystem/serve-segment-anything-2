@@ -480,7 +480,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         }
         sly.logger.info("Starting tracking process...", extra=log_extra)
         end_frame = start_frame + n_frames * direction
-        frames_indexes = list(range(start_frame, end_frame + direction, step=direction))
+        frames_indexes = list(range(start_frame, end_frame + direction, direction))
 
         # start background task for caching frames
         api.logger.debug("Starting cache task for video %s", video_id, extra=log_extra)
@@ -582,7 +582,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         }
         sly.logger.info("Starting tracking process...", extra=log_extra)
         end_frame = start_frame + n_frames * direction
-        frames_indexes = list(range(start_frame, end_frame + direction, step=direction))
+        frames_indexes = list(range(start_frame, end_frame + direction, direction))
         progress = sly.Progress(
             "Tracking progress", total_cnt=n_frames + 1 + n_frames * len(figure_ids)
         )
