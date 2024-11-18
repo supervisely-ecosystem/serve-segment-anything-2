@@ -475,7 +475,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         }
         sly.logger.info("Starting tracking process...", extra=log_extra)
         end_frame = start_frame + n_frames
-        progress = sly.Progress("Tracking progress", total_cnt=n_frames * 2 + 1)
+        progress = sly.Progress(
+            "Tracking progress", total_cnt=n_frames + 1 + n_frames * len(figure_ids)
+        )
 
         # start background task for caching frames
         api.logger.debug("Starting cache task for video %s", video_id, extra=log_extra)
