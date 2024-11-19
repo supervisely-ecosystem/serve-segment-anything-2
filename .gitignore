@@ -5,3 +5,4 @@ debug.env
 prompts/
 frames/
 app_data/
+.venv/
