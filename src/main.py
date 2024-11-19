@@ -117,7 +117,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         # build predictor
         self.predictor = SAM2ImagePredictor(self.sam)
         # define class names
-        self.class_names = ["target_mask"]
+        self.class_names = ["object_mask"]
         # list for storing mask colors
         self.mask_colors = [[255, 0, 0]]
         # variable for storing image ids from previous inference iterations
@@ -170,7 +170,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         geometry_json = data["data"]
         return sly.deserialize_geometry(geometry_type_str, geometry_json)
 
-    def predict(self, image_path: str, settings: Dict[str, Any]) -> List[sly.nn.PredictionMask]:
+    def predict(
+        self, image_path: str, settings: Dict[str, Any]
+    ) -> List[sly.nn.PredictionMask]:
         # prepare input data
         input_image = sly.image.read(image_path)
         # list for storing preprocessed masks
@@ -190,23 +192,19 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 crop_n_layers=settings["crop_n_layers"],
                 crop_nms_thresh=settings["crop_nms_thresh"],
                 crop_overlap_ratio=settings["crop_overlap_ratio"],
-                crop_n_points_downscale_factor=settings["crop_n_points_downscale_factor"],
+                crop_n_points_downscale_factor=settings[
+                    "crop_n_points_downscale_factor"
+                ],
                 min_mask_region_area=settings["min_mask_region_area"],
                 output_mode=settings["output_mode"],
             )
             masks = mask_generator.generate(input_image)
             for i, mask in enumerate(masks):
-                class_name = "object_" + str(i)
-                # add new class to model meta if necessary
-                if not self._model_meta.get_obj_class(class_name):
-                    color = generate_rgb(self.mask_colors)
-                    self.mask_colors.append(color)
-                    self.class_names.append(class_name)
-                    new_class = sly.ObjClass(class_name, sly.Bitmap, color)
-                    self._model_meta = self._model_meta.add_obj_class(new_class)
                 # get predicted mask
                 mask = mask["segmentation"]
-                predictions.append(sly.nn.PredictionMask(class_name=class_name, mask=mask))
+                predictions.append(
+                    sly.nn.PredictionMask(class_name="object_mask", mask=mask)
+                )
         elif settings["mode"] == "bbox":
             # get bbox coordinates
             if "rectangle" not in settings:
@@ -314,13 +312,17 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if (
                 settings["input_image_id"] in self.model_cache
                 and (
-                    self.model_cache.get(settings["input_image_id"]).get("previous_bbox")
+                    self.model_cache.get(settings["input_image_id"]).get(
+                        "previous_bbox"
+                    )
                     == bbox_coordinates
                 ).all()
                 and self.previous_image_id == settings["input_image_id"]
             ):
                 # get mask from previous predicton and use at as an input for new prediction
-                mask_input = self.model_cache.get(settings["input_image_id"])["mask_input"]
+                mask_input = self.model_cache.get(settings["input_image_id"])[
+                    "mask_input"
+                ]
                 if len(point_labels) > 1:
                     masks, scores, logits = self.predictor.predict(
                         point_coords=point_coordinates,
@@ -348,7 +350,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 padw = self.predictor.model.image_encoder.img_size - w
                 mask_input = np.pad(mask_input, ((0, padh), (0, padw)))
                 # downscale to 256x256
-                mask_input = cv2.resize(mask_input, (256, 256), interpolation=cv2.INTER_LINEAR)
+                mask_input = cv2.resize(
+                    mask_input, (256, 256), interpolation=cv2.INTER_LINEAR
+                )
                 # put values
                 mask_input = mask_input.astype(float)
                 mask_input[mask_input > 0] = 20
@@ -522,8 +526,12 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         for i, input_geom_data in enumerate(input_geometries):
             geometry = self._deserialize_geometry(input_geom_data)
-            if not isinstance(geometry, sly.Bitmap) and not isinstance(geometry, sly.Polygon):
-                raise TypeError(f"This app does not support {geometry.geometry_name()} tracking")
+            if not isinstance(geometry, sly.Bitmap) and not isinstance(
+                geometry, sly.Polygon
+            ):
+                raise TypeError(
+                    f"This app does not support {geometry.geometry_name()} tracking"
+                )
             # convert polygon to bitmap
             if isinstance(geometry, sly.Polygon):
                 polygon_obj_class = sly.ObjClass("polygon", sly.Polygon)
@@ -565,7 +573,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 masks = (masks > 0.0).cpu().numpy()
                 sum_mask = np.any(masks, axis=0)
                 geometry = sly.Bitmap(sum_mask, extra_validation=False)
-                results[-1].append({"type": geometry.geometry_name(), "data": geometry.to_json()})
+                results[-1].append(
+                    {"type": geometry.geometry_name(), "data": geometry.to_json()}
+                )
         return results
 
     def _track(
@@ -636,7 +646,12 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 time.sleep(NOTIFY_SLEEP_TIME)
             if progress.current > last_notify:
                 api.video.notify_progress(
-                    track_id, video_id, _start_frame, _end_frame, progress.current, progress.total
+                    track_id,
+                    video_id,
+                    _start_frame,
+                    _end_frame,
+                    progress.current,
+                    progress.total,
                 )
 
         notify_thread = threading.Thread(target=_notify_loop, daemon=True)
@@ -678,15 +693,23 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             for figure in figures:
                 if figure.geometry_type != sly.Bitmap.geometry_name():
                     sly.logger.warning(
-                        "Only geometries of shape mask are available for tracking", extra=log_extra
+                        "Only geometries of shape mask are available for tracking",
+                        extra=log_extra,
                     )
                     continue
                 first_frame = sly_image.read(f"{temp_frames_dir}/0.jpg")
-                geometry = sly.deserialize_geometry(figure.geometry_type, figure.geometry)
+                geometry = sly.deserialize_geometry(
+                    figure.geometry_type, figure.geometry
+                )
                 smarttool_input = self.get_smarttool_input(figure)
                 if smarttool_input is None:
                     prompt = self.generate_artificial_prompt(geometry, first_frame)
-                    smarttool_input = (prompt["bbox"], prompt["point_coordinates"], [], True)
+                    smarttool_input = (
+                        prompt["bbox"],
+                        prompt["point_coordinates"],
+                        [],
+                        True,
+                    )
 
                 # bbox - ltrb
                 # points - col, row
@@ -709,12 +732,15 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 mask = mask.astype(bool)
                 if np.all(~mask):
                     logger.debug(
-                        "Empty mask detected", extra={**log_extra, "frame_index": frame_index}
+                        "Empty mask detected",
+                        extra={**log_extra, "frame_index": frame_index},
                     )
                     if not empty_mask_notified:
                         try:
                             message = "The model has predicted empty mask"
-                            api.video.notify_tracking_warning(track_id, video_id, message)
+                            api.video.notify_tracking_warning(
+                                track_id, video_id, message
+                            )
                             empty_mask_notified = True
                         except Exception as e:
                             api.logger.warning(
@@ -765,13 +791,18 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         time.sleep(UPLOAD_SLEEP_TIME)
                 except Exception as e:
                     api.logger.error(
-                        "Error in upload loop: %s", str(e), exc_info=True, extra=log_extra
+                        "Error in upload loop: %s",
+                        str(e),
+                        exc_info=True,
+                        extra=log_extra,
                     )
                     upload_error.set()
                     raise
 
             upload_thread = threading.Thread(
-                target=_upload_loop, args=(upload_queue, upload_stop, _upload_single), daemon=True
+                target=_upload_loop,
+                args=(upload_queue, upload_stop, _upload_single),
+                daemon=True,
             )
             upload_thread.start()
 
@@ -787,7 +818,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 frame_index = start_frame + out_frame_idx * direction
                 for figure_id, masks in zip(out_obj_ids, out_mask_logits):
                     if upload_error.is_set():
-                        raise RuntimeError("Tracking is stopped due to an error in upload loop")
+                        raise RuntimeError(
+                            "Tracking is stopped due to an error in upload loop"
+                        )
                     masks = (masks > 0.0).cpu().numpy()
                     for i, mask in enumerate(masks):
                         upload_queue.put((frame_index, figure_id, mask, i == 0))
@@ -848,8 +881,12 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 return {"message": "400: Bad request.", "success": False}
 
             # collect clicks
-            uncropped_clicks = [{**click, "is_positive": True} for click in positive_clicks]
-            uncropped_clicks += [{**click, "is_positive": False} for click in negative_clicks]
+            uncropped_clicks = [
+                {**click, "is_positive": True} for click in positive_clicks
+            ]
+            uncropped_clicks += [
+                {**click, "is_positive": False} for click in negative_clicks
+            ]
             clicks = functional.transform_clicks_to_crop(crop, uncropped_clicks)
             is_in_bbox = functional.validate_click_bounds(crop, clicks)
             if not is_in_bbox:
@@ -1044,7 +1081,9 @@ if is_debug_with_sly_net():
     team_id = sly.env.team_id()
     original_dir = os.getcwd()
     sly_app_development.supervisely_vpn_network(action="up")
-    task = sly_app_development.create_debug_task(team_id, port="8000", update_status=True)
+    task = sly_app_development.create_debug_task(
+        team_id, port="8000", update_status=True
+    )
     os.chdir(original_dir)
 
 m = SegmentAnything2(
