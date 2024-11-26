@@ -705,7 +705,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 if smarttool_input is None:
                     prompt = self.generate_artificial_prompt(geometry, first_frame)
                     smarttool_input = (
-                        prompt["bbox"],
+                        prompt.get("bbox"),
                         prompt["point_coordinates"],
                         [],
                         True,

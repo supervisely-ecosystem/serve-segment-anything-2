@@ -15,7 +15,7 @@ RUN SAM2_BUILD_ALLOW_ERRORS=0 pip3 install -v -e ".[demo]"
 RUN python3 setup.py clean --all
 RUN python3 setup.py build_ext --inplace
 
-RUN python3 -m pip install supervisely==6.73.171
+RUN python3 -m pip install supervisely==6.73.233
 
 RUN apt-get update
 RUN apt-get install ffmpeg libgeos-dev libsm6 libxext6 libexiv2-dev libxrender-dev libboost-all-dev -y
