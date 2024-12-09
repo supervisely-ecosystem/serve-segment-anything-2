@@ -29,9 +29,15 @@ Unlike the first version of Segment Anything, the frame embedding used by the SA
 
 # How To Run
 
-**Step 1.** Select pretrained model architecture and press the **Serve** button
+**Step 1** Select pretrained model architecture and press the **Serve** button
 
 ![sam2 pretrained models](https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/v0.0.1/sam2_pretrained_models.png)
+
+Alternatively, you can load your custom SAM 2 checkpoint:
+
+<video width="100%" preload="auto" autoplay muted loop>
+    <source src="https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/v0.0.1/sam2_load_custom_checkpoint.mp4" type="video/mp4">
+</video>
 
 **Step 2.** Wait for the model to deploy
 

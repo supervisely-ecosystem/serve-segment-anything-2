@@ -28,6 +28,8 @@ from supervisely.imaging.color import generate_rgb
 from supervisely.io.fs import mkdir, remove_dir, silent_remove
 from supervisely.nn.inference.interactive_segmentation import functional
 from supervisely.sly_logger import logger
+from supervisely.app.widgets import SelectString, Field
+
 
 load_dotenv("supervisely.env")
 load_dotenv("debug.env")
@@ -48,6 +50,17 @@ def notqdm(iterable, *args, **kwargs):
 
 
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
+    def add_content_to_custom_tab(self, gui):
+        self.select_config = SelectString(
+            values=[
+                "sam2.1_hiera_t.yaml",
+                "sam2.1_hiera_s.yaml",
+                "sam2.1_hiera_b+.yaml",
+                "sam2.1_hiera_l.yaml",
+            ]
+        )
+        select_config_f = Field(self.select_config, "Select SAM 2 model config")
+        return select_config_f
 
     def add_content_to_pretrained_tab(self, gui):
         self.use_bbox = Switch(switched=True)
@@ -64,7 +77,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         return use_bbox_field
 
     def support_custom_models(self):
-        return False
+        return True
 
     def get_models(self, mode="table"):
         model_data = sly.json.load_json_file(model_data_path)
@@ -96,8 +109,21 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         model_dir: str,
         device: Literal["cpu", "cuda", "cuda:0", "cuda:1", "cuda:2", "cuda:3"] = "cpu",
     ):
-        # get weights path and config
-        self.weights_path, self.config = self.get_weights_path_and_config()
+        model_source = self.gui.get_model_source()
+        if model_source == "Pretrained models":
+            # get weights path and config
+            self.weights_path, self.config = self.get_weights_path_and_config()
+        elif model_source == "Custom models":
+            custom_link = self.gui.get_custom_link()
+            weights_file_name = os.path.basename(custom_link)
+            self.weights_path = os.path.join(model_dir, weights_file_name)
+            if not sly.fs.file_exists(self.weights_path):
+                self.download(
+                    src_path=custom_link,
+                    dst_path=self.weights_path,
+                )
+            self.config = self.select_config.get_value()
+            self.config = "configs/sam2.1/" + self.config
         # build model
         self.sam = build_sam2(self.config, self.weights_path, device=device)
         # load model on device
