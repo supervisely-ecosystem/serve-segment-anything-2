@@ -6,3 +6,4 @@ prompts/
 frames/
 app_data/
 .venv/
+train/tempfiles/
