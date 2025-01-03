@@ -1,8 +1,6 @@
 from torch.utils.data import Dataset
 import supervisely as sly
-import src.globals as g
 from src.utils import get_multilabel_mask, resize_image_and_mask
-import numpy as np
 
 
 class SAM2Dataset(Dataset):

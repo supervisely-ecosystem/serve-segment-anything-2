@@ -232,7 +232,7 @@ card_project_settings = Card(
 
 
 ### 2. Project classes
-classes_table = ClassesTable(allowed_types=[sly.Bitmap])
+classes_table = ClassesTable(allowed_types=[sly.Bitmap, sly.Polygon])
 select_classes_button = Button("select classes")
 select_classes_button.hide()
 select_other_classes_button = Button(
@@ -377,9 +377,24 @@ card_model_selection.lock()
 
 ### 5. Training hyperparameters
 n_epochs_input = InputNumber(value=100, min=1)
-n_epochs_input_f = Field(content=n_epochs_input, title="Number of epochs")
+n_epochs_input_f = Field(
+    content=n_epochs_input,
+    title="Number of epochs",
+    description=(
+        "Number of epochs is equal to the number of times the model will see the entire dataset during training."
+        " One epoch recflects a full training cycle through all images of the training dataset."
+    ),
+)
 batch_size_input = InputNumber(value=2, min=1)
-batch_size_input_f = Field(content=batch_size_input, title="Batch size")
+batch_size_input_f = Field(
+    content=batch_size_input,
+    title="Batch size",
+    description=(
+        "Batch size is the number of images that are being passed through the model during each training iteration."
+        " Small batch sizes require less GPU memory, while large batch sizes can speed up the training process by "
+        "reducing number of weights updates required within one epoch."
+    ),
+)
 patience_input = InputNumber(value=10, min=1)
 patience_input_f = Field(
     content=patience_input,
@@ -393,9 +408,104 @@ validation_freq_input_f = Field(
     description="Validate model and save checkpoint every Nth epoch. Only best checkpoints will be saved",
 )
 learning_rate_input = InputNumber(value=1e-4, min=1e-8, max=0.1, step=0.00001)
-learning_rate_input_f = Field(content=learning_rate_input, title="Learning rate")
+learning_rate_input_f = Field(
+    content=learning_rate_input,
+    title="Learning rate",
+    description=(
+        "Learning rate is a parameter that defines the step size taken towards a global minimum of the "
+        "loss function during model training. During each training iteration, learning rate is multiplied"
+        " by the gradient of the loss function to update model weights. Too low learning rate can lead to"
+        " slow convergence, while too high learning rate can cause the model to overshoot optimal weights."
+    ),
+)
+use_scheduler_checkbox = Checkbox(content="enable", checked=True)
+use_scheduler_checkbox_f = Field(
+    content=use_scheduler_checkbox,
+    title="Learning rate scheduler",
+    description=(
+        "Learning rate schedulers dynamically adjust the learning rate according to some specific "
+        "schedule. Adaptive learning rate helps to achieve faster model convergence and better "
+        "performance."
+    ),
+)
+lr_scheduler_select = SelectString(
+    values=[
+        "StepLR",
+        "LambdaLR",
+        "MultiplicativeLR",
+        "ReduceLROnPlateau",
+    ],
+    items_links=[
+        "https://pytorch.org/docs/stable/generated/torch.optim.lr_scheduler.StepLR.html#torch.optim.lr_scheduler.StepLR",
+        "https://pytorch.org/docs/stable/generated/torch.optim.lr_scheduler.LambdaLR.html#torch.optim.lr_scheduler.LambdaLR",
+        "https://pytorch.org/docs/stable/generated/torch.optim.lr_scheduler.MultiplicativeLR.html#torch.optim.lr_scheduler.MultiplicativeLR",
+        "https://pytorch.org/docs/stable/generated/torch.optim.lr_scheduler.ReduceLROnPlateau.html#torch.optim.lr_scheduler.ReduceLROnPlateau",
+    ],
+)
+lr_scheduler_info = Text(
+    text="Decays the learning rate of each parameter group by gamma every step_size epochs",
+    status="info",
+)
+step_size_input = InputNumber(value=10, min=1)
+step_size_input_f = Field(
+    content=step_size_input,
+    title="",
+    description="step size",
+)
+gamma_input = InputNumber(value=0.5, step=0.1, min=1e-10, max=0.9)
+gamma_input_f = Field(
+    content=gamma_input,
+    title="",
+    description="gamma",
+)
+step_lr_container = Container(
+    widgets=[step_size_input_f, gamma_input_f, Empty()],
+    direction="horizontal",
+    overflow="wrap",
+    fractions=[1, 1, 5],
+)
+lambda_func_input = Input(value="lambda epoch: 0.95 ** epoch")
+lambda_mult_container = Container(
+    widgets=[lambda_func_input, Empty()],
+    direction="horizontal",
+    overflow="wrap",
+    fractions=[1, 3],
+)
+lambda_mult_container_f = Field(
+    content=lambda_mult_container, title="", description="Lambda function"
+)
+lambda_mult_container_f.hide()
+factor_input = InputNumber(value=0.1, step=0.1, min=1e-10, max=0.9)
+factor_input_f = Field(
+    content=factor_input,
+    title="",
+    description="factor",
+)
+plateau_patience_input = InputNumber(value=10, step=1, min=1)
+plateau_patience_input_f = Field(
+    content=plateau_patience_input,
+    title="",
+    description="patience",
+)
+plateau_lr_container = Container(
+    widgets=[factor_input_f, plateau_patience_input_f, Empty()],
+    direction="horizontal",
+    overflow="wrap",
+    fractions=[1, 1, 5],
+)
+plateau_lr_container.hide()
 weight_decay_input = InputNumber(value=1e-4, min=1e-8, max=0.1, step=0.00001)
-weight_decay_input_f = Field(content=weight_decay_input, title="Weight decay")
+weight_decay_input_f = Field(
+    content=weight_decay_input,
+    title="Weight decay",
+    description=(
+        "Weight decay is a technique used in machine learning in order to prevent overfitting. "
+        "Weight decay helps to stabilize model training process by preventing model weights "
+        "from having too large values. It is necessary to avoid having large values of model "
+        "weights since it makes model sensitive to noise in data and worsens model's generalization "
+        "capabilities."
+    ),
+)
 clip_gradients_checkbox = Checkbox(content="enable", checked=False)
 clip_gradients_checkbox_f = Field(
     content=clip_gradients_checkbox,
@@ -428,7 +538,8 @@ clip_gradients_type_select_f.hide()
 clip_gradients_threshold = InputNumber(value=1.0, min=0.1, step=0.1)
 clip_gradients_threshold_f = Field(
     content=clip_gradients_threshold,
-    title="clipping threshold",
+    title="",
+    description="clipping threshold",
 )
 clip_gradients_threshold_f.hide()
 grad_acc_checkbox = Checkbox(content="enable", checked=False)
@@ -447,7 +558,8 @@ grad_acc_checkbox_f = Field(
 n_acc_steps_input = InputNumber(value=4, min=2)
 n_acc_steps_input_f = Field(
     content=n_acc_steps_input,
-    title="number of accumulation steps",
+    title="",
+    description="number of accumulation steps",
 )
 n_acc_steps_input_f.hide()
 min_points_input = InputNumber(value=1, min=1)
@@ -501,6 +613,12 @@ train_params_content = Container(
         patience_input_f,
         validation_freq_input_f,
         learning_rate_input_f,
+        use_scheduler_checkbox_f,
+        lr_scheduler_select,
+        lr_scheduler_info,
+        step_lr_container,
+        lambda_mult_container_f,
+        plateau_lr_container,
         weight_decay_input_f,
         clip_gradients_checkbox_f,
         clip_gradients_type_select_f,
@@ -840,6 +958,66 @@ def change_file_preview(value):
         custom_model_file_thumbnail.set(file_info)
 
 
+def change_lr_ui(lr_scheduler):
+    if lr_scheduler == "StepLR":
+        lr_scheduler_info.set(
+            text="Decays the learning rate of each parameter group by gamma every step_size epochs",
+            status="info",
+        )
+        step_lr_container.show()
+        lambda_mult_container_f.hide()
+        plateau_lr_container.hide()
+    elif lr_scheduler == "LambdaLR":
+        lr_scheduler_info.set(
+            text="The learning rate of each parameter group is set to the initial learning rate times a given lambda function",
+            status="info",
+        )
+        step_lr_container.hide()
+        lambda_mult_container_f.show()
+        plateau_lr_container.hide()
+    elif lr_scheduler == "MultiplicativeLR":
+        lr_scheduler_info.set(
+            text="Multiplies the learning rate of each parameter group by the factor given in the lambda function",
+            status="info",
+        )
+        step_lr_container.hide()
+        lambda_mult_container_f.show()
+        plateau_lr_container.hide()
+    elif lr_scheduler == "ReduceLROnPlateau":
+        lr_scheduler_info.set(
+            text=(
+                "Reduces learning rate when a metric has stopped improving. Models often benefit from reducing "
+                "the learning rate by a factor of 2-10 once learning stagnates. This scheduler reads a metrics"
+                " quantity and if no improvement is seen for a patience number of epochs, the learning rate is"
+                " reduced."
+            ),
+            status="info",
+        )
+        step_lr_container.hide()
+        lambda_mult_container_f.hide()
+        plateau_lr_container.show()
+
+
+@use_scheduler_checkbox.value_changed
+def change_lr_content_visibility(value):
+    if value:
+        lr_scheduler_select.show()
+        lr_scheduler_info.show()
+        lr_scheduler = lr_scheduler_select.get_value()
+        change_lr_ui(lr_scheduler)
+    else:
+        lr_scheduler_select.hide()
+        lr_scheduler_info.hide()
+        step_lr_container.hide()
+        lambda_mult_container_f.hide()
+        plateau_lr_container.hide()
+
+
+@lr_scheduler_select.value_changed
+def change_lr_scheduler(value):
+    change_lr_ui(value)
+
+
 @clip_gradients_checkbox.value_changed
 def show_gradient_clipping_content(value):
     if value:
@@ -956,6 +1134,14 @@ def save_train_params():
     patience_input.disable()
     validation_freq_input.disable()
     learning_rate_input.disable()
+    use_scheduler_checkbox.disable()
+    lr_scheduler_select.disable()
+    lr_scheduler_info.disable()
+    step_size_input.disable()
+    gamma_input.disable()
+    lambda_func_input.disable()
+    factor_input.disable()
+    plateau_patience_input.disable()
     weight_decay_input.disable()
     clip_gradients_checkbox.disable()
     clip_gradients_type_select.disable()
@@ -982,6 +1168,13 @@ def change_train_params():
     patience_input.enable()
     validation_freq_input.enable()
     learning_rate_input.enable()
+    lr_scheduler_select.enable()
+    lr_scheduler_info.enable()
+    step_size_input.enable()
+    gamma_input.enable()
+    lambda_func_input.enable()
+    factor_input.enable()
+    plateau_patience_input.enable()
     weight_decay_input.enable()
     clip_gradients_checkbox.enable()
     clip_gradients_type_select.enable()
@@ -1185,7 +1378,6 @@ def start_training():
         params=predictor.model.parameters(), lr=learning_rate, weight_decay=weight_decay
     )
     scaler = torch.cuda.amp.GradScaler()
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
     n_epochs = n_epochs_input.get_value()
     val_freq = validation_freq_input.get_value()
     patience = patience_input.get_value()
@@ -1201,6 +1393,27 @@ def start_training():
         n_acc_steps = n_acc_steps_input.get_value()
     else:
         n_acc_steps = 1
+    use_scheduler = use_scheduler_checkbox.is_checked()
+    if use_scheduler:
+        scheduler_name = lr_scheduler_select.get_value()
+        if scheduler_name == "StepLR":
+            step_size = step_size_input.get_value()
+            gamma = gamma_input.get_value()
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size, gamma)
+        elif scheduler_name == "LambdaLR":
+            lambda_func = eval(lambda_func_input.get_value())
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda_func)
+        elif scheduler_name == "MultiplicativeLR":
+            lambda_func = eval(lambda_func_input.get_value())
+            scheduler = torch.optim.lr_scheduler.MultiplicativeLR(
+                optimizer, lambda_func
+            )
+        elif scheduler_name == "ReduceLROnPlateau":
+            factor = factor_input.get_value()
+            plateau_patience = plateau_patience_input.get_value()
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, factor=factor, patience=plateau_patience
+            )
 
     # train loop
     with progress_bar_epochs(message="Epochs:", total=n_epochs) as epoch_pbar:
@@ -1301,8 +1514,6 @@ def start_training():
                         scaler.update()  # Update mixed precision
                         predictor.model.zero_grad()
 
-                    scheduler.step()
-
                     batch_pbar.update()
 
                     if epoch == 1 and batch_number == 0:
@@ -1317,6 +1528,12 @@ def start_training():
                 train_epoch_loss = train_epoch_loss.item()
                 train_epoch_iou = train_epoch_iou / (len(train_loader))
                 train_epoch_iou = train_epoch_iou.item()
+
+                if use_scheduler:
+                    if scheduler_name == "ReduceLROnPlateau":
+                        scheduler.step(train_epoch_loss)
+                    else:
+                        scheduler.step()
 
                 sly.logger.info(f"Epoch {epoch} train loss: {train_epoch_loss}")
                 sly.logger.info(f"Epoch {epoch} train IoU: {train_epoch_iou}")

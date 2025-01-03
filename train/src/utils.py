@@ -195,7 +195,7 @@ def generate_predictions(
                         mask = masks[max_score_ind]
             # generate sly annotation from predicted mask
             bitmap = sly.Bitmap(mask)
-            obj_class = gt_ann.labels[0].obj_class
+            obj_class = sly.ObjClass("object_mask", sly.Bitmap)
             label = sly.Label(bitmap, obj_class)
             img_height, img_width = img.shape[:2]
             pred_ann = sly.Annotation(img_size=[img_height, img_width], labels=[label])
