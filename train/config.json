@@ -1,0 +1,35 @@
+{
+    "name": "Fine-tune Segment Anything 2.1",
+    "version": "2.0.0",
+    "type": "app",
+    "categories": [
+        "neural network",
+        "images",
+        "videos",
+        "interactive segmentation",
+        "segmentation & tracking",
+        "train"
+    ],
+    "description": "Dashboard for SAM 2.1 fine-tuning",
+    "docker_image": "supervisely/segment-anything-2:1.0.8",
+    "instance_version": "6.12.5",
+    "entrypoint": "python3 -m uvicorn src.main:app --app-dir ./train --host 0.0.0.0 --port 8000 --ws websockets",
+    "task_location": "workspace_tasks",
+    "need_gpu": true,
+    "gpu": "required",
+    "isolate": true,
+    "icon": "",
+    "icon_cover": true,
+    "poster": "",
+    "context_menu": {
+        "target": [
+            "images_project"
+        ],
+        "context_root": "Neural Networks",
+        "context_category": "SAM"
+    },
+    "community_agent": false,
+    "license": {
+        "type": "Apache-2.0"
+    }
+}

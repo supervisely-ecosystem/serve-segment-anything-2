@@ -454,7 +454,7 @@ lr_scheduler_info = Text(
     text="Decays the learning rate of each parameter group by gamma every step_size epochs",
     status="info",
 )
-step_size_input = InputNumber(value=10, min=1)
+step_size_input = InputNumber(value=5, min=1)
 step_size_input_f = Field(
     content=step_size_input,
     title="",
@@ -1828,7 +1828,11 @@ def start_training():
 
                     # save checkpoint (if best)
                     if val_epoch_iou > best_val_iou:
-                        torch.save(predictor.model.state_dict(), checkpoint_save_path)
+                        model_dict = {
+                            "model": predictor.model.state_dict(),
+                            "config": config_path,
+                        }
+                        torch.save(model_dict, checkpoint_save_path)
                         best_val_iou = val_epoch_iou
                         best_val_epoch = epoch
 
@@ -1855,9 +1859,10 @@ def start_training():
 
     # generate image predictions
     if os.path.exists(checkpoint_save_path):
-        sam2_model.eval()
-        finetuned_predictor = SAM2ImagePredictor(sam2_model)
-        finetuned_predictor.model.load_state_dict(torch.load(checkpoint_save_path))
+        finetuned_sam2_model = build_sam2(
+            config_path, checkpoint_save_path, device=device
+        )
+        finetuned_predictor = SAM2ImagePredictor(finetuned_sam2_model)
         predictions_paths = generate_predictions(
             val_set,
             finetuned_predictor,

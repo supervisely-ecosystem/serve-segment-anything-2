@@ -11,7 +11,7 @@ models_data = sly.json.load_json_file("models/models.json")
 if sly.is_production():
     app_session_id = sly.io.env.task_id()
 else:
-    app_session_id = 777
+    app_session_id = 778
 
 train_artifacts_dir = os.path.join(app_data_dir, "artifacts")
 if not os.path.exists(train_artifacts_dir):
