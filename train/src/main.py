@@ -54,6 +54,14 @@ from functools import partial
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 from torch.utils.data import DataLoader
+from segmentation_models_pytorch.losses import (
+    FocalLoss,
+    DiceLoss,
+    JaccardLoss,
+    LovaszLoss,
+    MCCLoss,
+    TverskyLoss,
+)
 
 
 # load credentials
@@ -506,7 +514,7 @@ weight_decay_input_f = Field(
         "capabilities."
     ),
 )
-clip_gradients_checkbox = Checkbox(content="enable", checked=False)
+clip_gradients_checkbox = Checkbox(content="enable", checked=True)
 clip_gradients_checkbox_f = Field(
     content=clip_gradients_checkbox,
     title="Gradient clipping",
@@ -534,14 +542,12 @@ clip_gradients_type_select_f = Field(
         " multiplying the unit vector of the gradients with given threshold."
     ),
 )
-clip_gradients_type_select_f.hide()
 clip_gradients_threshold = InputNumber(value=1.0, min=0.1, step=0.1)
 clip_gradients_threshold_f = Field(
     content=clip_gradients_threshold,
     title="",
     description="clipping threshold",
 )
-clip_gradients_threshold_f.hide()
 grad_acc_checkbox = Checkbox(content="enable", checked=False)
 grad_acc_checkbox_f = Field(
     content=grad_acc_checkbox,
@@ -562,11 +568,64 @@ n_acc_steps_input_f = Field(
     description="number of accumulation steps",
 )
 n_acc_steps_input_f.hide()
+loss_func_select = SelectString(
+    values=[
+        "Focal + Dice loss",
+        "FocalLoss",
+        "CrossEntropyLoss",
+        "DiceLoss",
+        "JaccardLoss",
+        "TverskyLoss",
+        "MCCLoss",
+        "LovaszLoss",
+    ]
+)
+loss_func_select_f = Field(
+    content=loss_func_select,
+    title="Segmentation loss function",
+    description=(
+        "Loss function is a mathematical function for estimating the difference between labels "
+        "predicted by model and ground truth labels. The goal of the training process is to find"
+        " the global minimum of the loss function at which model will perform best."
+    ),
+)
+loss_func_info = Text(
+    text=(
+        "Original loss function used for SAM 2 training. A linear combination of Focal and Dice "
+        "losses with a ratio of 20:1 respectively."
+    ),
+    status="info",
+)
+focal_gamma_input = InputNumber(value=2, min=0, step=0.1)
+focal_gamma_input_f = Field(
+    content=focal_gamma_input,
+    title="",
+    description="gamma (focusing parameter for adjusting the rate at which easy samples are down-weighted)",
+)
+focal_gamma_input_f.hide()
+tversky_alpha_input = InputNumber(value=0.6, min=0.1, max=0.9, step=0.1)
+tversky_alpha_input_f = Field(
+    content=tversky_alpha_input,
+    title="",
+    description="alpha",
+)
+tversky_beta_input = InputNumber(value=0.4, min=0.1, max=0.9, step=0.1)
+tversky_beta_input_f = Field(
+    content=tversky_beta_input,
+    title="",
+    description="beta",
+)
+tversky_param_container = Container(
+    widgets=[tversky_alpha_input_f, tversky_beta_input_f, Empty()],
+    direction="horizontal",
+    overflow="wrap",
+    fractions=[1, 1, 5],
+)
+tversky_param_container.hide()
 min_points_input = InputNumber(value=1, min=1)
 min_points_input_f = Field(content=min_points_input, title="min")
 max_points_input = InputNumber(value=3, min=1)
 max_points_input_f = Field(content=max_points_input, title="max")
-empty_points = Empty()
 n_points_input = Container(
     widgets=[
         min_points_input_f,
@@ -625,6 +684,10 @@ train_params_content = Container(
         clip_gradients_threshold_f,
         grad_acc_checkbox_f,
         n_acc_steps_input_f,
+        loss_func_select_f,
+        loss_func_info,
+        focal_gamma_input_f,
+        tversky_param_container,
         n_points_input_f,
         preview_prompt_button,
         previews_container,
@@ -1036,6 +1099,96 @@ def show_gradient_accumulation_content(value):
         n_acc_steps_input_f.hide()
 
 
+@loss_func_select.value_changed
+def change_loss_func(value):
+    if value == "Focal + Dice loss":
+        loss_func_info.set(
+            text=(
+                "Original loss function used for SAM 2 training. A linear combination of Focal and Dice "
+                "losses with a ratio of 20:1 respectively."
+            ),
+            status="info",
+        )
+        focal_gamma_input_f.hide()
+        tversky_param_container.hide()
+    if value == "FocalLoss":
+        loss_func_info.set(
+            text=(
+                "Applies a scaling factor to the cross entropy loss in order to focus learning on hard"
+                " misclassified examples. This scaling factor decreases as model confidence in correct"
+                " class increases, thereby down-weighting the contribution of easy samples, making model"
+                " focus on hard samples during training. Works best with highly imbalanced datasets."
+            ),
+            status="info",
+        )
+        focal_gamma_input_f.show()
+        tversky_param_container.hide()
+    elif value == "CrossEntropyLoss":
+        loss_func_info.set(
+            text=(
+                "Measures the difference between probability distributions of predicted and ground "
+                "truth labels. Standard choice when training dataset has no significant class imbalance."
+            ),
+            status="info",
+        )
+        focal_gamma_input_f.hide()
+        tversky_param_container.hide()
+    elif value == "DiceLoss":
+        loss_func_info.set(
+            text=(
+                "Differentiable modification of Dice coefficient - a metric used to evaluate the overlap between predicted"
+                " and ground truth segmentation masks. Prevents the model from ignoring the minority classes by focusing "
+                "on the overlapping regions between the predicted and ground truth mask."
+            ),
+            status="info",
+        )
+        focal_gamma_input_f.hide()
+        tversky_param_container.hide()
+    elif value == "JaccardLoss":
+        loss_func_info.set(
+            text=(
+                "Differentiable modification of IoU (Jaccard index) - a gold standard metric used to evaluate performance"
+                " of image segmentation models. Useful for cases where the balance between precision and recall is crucial."
+            ),
+            status="info",
+        )
+    elif value == "LovaszLoss":
+        loss_func_info.set(
+            text=(
+                "A loss function for direct optimization of IoU score. Unlike many other losses, it operates directly on "
+                "the IoU scores between the predicted and actual labels, rather than summing over pixel-wise errors. "
+            ),
+            status="info",
+        )
+        focal_gamma_input_f.hide()
+        tversky_param_container.hide()
+    elif value == "MCCLoss":
+        loss_func_info.set(
+            text=(
+                "Based on Matthews correlation coefficient - a metric indicating the correlation between predicted and "
+                "ground truth labels. Originally designed for medical image segmentation scenarios, MCC loss penalizes "
+                "for both foreground and background pixel misclassifications. Efficient in scenarios with skewed class "
+                "distributions."
+            ),
+            status="info",
+        )
+        focal_gamma_input_f.hide()
+        tversky_param_container.hide()
+    elif value == "TverskyLoss":
+        loss_func_info.set(
+            text=(
+                "Modification of Dice loss which allows to control the penalties for false negative and false positive "
+                "types of errors with the help of alpha and beta hyperparameters, respectively. These hyperparameters "
+                "allow the tuning of the loss function to focus more on either false positives or false negatives during"
+                "  training. This capability is useful in cases where the costs of different types of segmentation errors"
+                " are not equal."
+            ),
+            status="info",
+        )
+        focal_gamma_input_f.hide()
+        tversky_param_container.show()
+
+
 @preview_prompt_button.click
 def preview_prompt():
     # define directory for storing preview files
@@ -1148,6 +1301,10 @@ def save_train_params():
     clip_gradients_threshold.disable()
     grad_acc_checkbox.disable()
     n_acc_steps_input.disable()
+    loss_func_select.disable()
+    focal_gamma_input.disable()
+    tversky_alpha_input.disable()
+    tversky_beta_input.disable()
     min_points_input.disable()
     max_points_input.disable()
     preview_prompt_button.disable()
@@ -1181,6 +1338,10 @@ def change_train_params():
     clip_gradients_threshold.enable()
     grad_acc_checkbox.enable()
     n_acc_steps_input.enable()
+    loss_func_select.enable()
+    focal_gamma_input.enable()
+    tversky_alpha_input.enable()
+    tversky_beta_input.enable()
     min_points_input.enable()
     max_points_input.enable()
     preview_prompt_button.enable()
@@ -1415,6 +1576,42 @@ def start_training():
                 optimizer, factor=factor, patience=plateau_patience
             )
 
+    loss_name = loss_func_select.get_value()
+    if loss_name == "Focal + Dice loss":
+
+        class SAM2_original_loss:
+            def __init__(self):
+                self.focal_loss = FocalLoss(mode="binary")
+                self.dice_loss = DiceLoss(mode="binary", from_logits=False)
+
+            def __call__(self, prd_mask, gt_mask):
+                focal_loss_score = self.focal_loss(prd_mask, gt_mask)
+                dice_loss_score = self.dice_loss(prd_mask, gt_mask)
+                score = focal_loss_score + 0.05 * dice_loss_score
+                return score
+
+        loss_func = SAM2_original_loss()
+
+    elif loss_name == "FocalLoss":
+        focal_gamma = focal_gamma_input.get_value()
+        loss_func = FocalLoss(mode="binary", gamma=focal_gamma)
+    elif loss_name == "CrossEntropyLoss":
+        loss_func = torch.nn.BCELoss(reduction="mean")
+    elif loss_name == "DiceLoss":
+        loss_func = DiceLoss(mode="binary", from_logits=False)
+    elif loss_name == "JaccardLoss":
+        loss_func = JaccardLoss(mode="binary", from_logits=False)
+    elif loss_name == "LovaszLoss":
+        loss_func = LovaszLoss(mode="binary", from_logits=False)
+    elif loss_name == "MCCLoss":
+        loss_func = MCCLoss()
+    elif loss_name == "TverskyLoss":
+        tversky_alpha = tversky_alpha_input.get_value()
+        tversky_beta = tversky_beta_input.get_value()
+        loss_func = TverskyLoss(
+            mode="binary", from_logits=False, alpha=tversky_alpha, beta=tversky_beta
+        )
+
     # train loop
     with progress_bar_epochs(message="Epochs:", total=n_epochs) as epoch_pbar:
         best_val_iou = 0
@@ -1480,25 +1677,25 @@ def start_training():
                         prd_masks = predictor._transforms.postprocess_masks(
                             low_res_masks, predictor._orig_hw[-1]
                         )
-                        gt_mask = torch.tensor(
-                            np.array(batch_masks).astype(np.float32)
-                        ).cuda()
-                        prd_mask = torch.sigmoid(prd_masks[:, 0])
-                        inter = (gt_mask * (prd_mask > 0.5)).sum(1).sum(1)
-                        iou = inter / (
-                            gt_mask.sum(1).sum(1)
-                            + (prd_mask > 0.5).sum(1).sum(1)
-                            - inter
-                        )
-                        iou = np.mean(iou.cpu().detach().numpy())
-                        seg_loss = (
-                            -gt_mask * torch.log(prd_mask + 0.000001)
-                            - (1 - gt_mask) * torch.log((1 - prd_mask) + 0.00001)
-                        ).mean()
-                        score_loss = torch.abs(prd_scores[:, 0] - iou).mean()
-                        loss = seg_loss + score_loss * 0.05
-                        train_epoch_loss += loss
-                        train_epoch_iou += iou
+                    gt_mask = torch.tensor(
+                        np.array(batch_masks).astype(np.float32)
+                    ).cuda()
+                    prd_mask = torch.sigmoid(prd_masks[:, 0])
+                    inter = (gt_mask * (prd_mask > 0.5)).sum(1).sum(1)
+                    iou = inter / (
+                        gt_mask.sum(1).sum(1) + (prd_mask > 0.5).sum(1).sum(1) - inter
+                    )
+                    iou = np.mean(iou.cpu().detach().numpy())
+
+                    if loss_name != "CrossEntropyLoss":
+                        gt_mask = gt_mask.type(torch.int64)
+
+                    seg_loss = loss_func(prd_mask, gt_mask)
+                    score_loss = torch.abs(prd_scores[:, 0] - iou).mean()
+                    loss = seg_loss + score_loss * 0.05
+
+                    train_epoch_loss += loss
+                    train_epoch_iou += iou
 
                     # Backpropagation
                     loss = loss / n_acc_steps
@@ -1588,10 +1785,11 @@ def start_training():
                                 - inter
                             )
                             iou = np.mean(iou.cpu().detach().numpy())
-                            seg_loss = (
-                                -gt_mask * torch.log(prd_mask + 0.000001)
-                                - (1 - gt_mask) * torch.log((1 - prd_mask) + 0.00001)
-                            ).mean()
+
+                            if loss_name != "CrossEntropyLoss":
+                                gt_mask = gt_mask.type(torch.int64)
+
+                            seg_loss = loss_func(prd_mask, gt_mask)
                             score_loss = torch.abs(prd_scores[:, 0] - iou).mean()
                             loss = seg_loss + score_loss * 0.05
                             val_epoch_loss += loss
