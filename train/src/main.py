@@ -1618,6 +1618,7 @@ def start_training():
         best_val_epoch = 0
         train_loss_history, train_iou_history = [], []
         val_loss_history, val_iou_history = [], []
+        prev_val_epoch_iou = 0
         no_improvements = 0
 
         for epoch in range(1, n_epochs + 1):
@@ -1836,6 +1837,7 @@ def start_training():
                         best_val_iou = val_epoch_iou
                         best_val_epoch = epoch
 
+                    if val_epoch_iou > prev_val_epoch_iou:
                         no_improvements = 0
                     else:
                         no_improvements += 1
@@ -1852,6 +1854,8 @@ def start_training():
                             )
                             early_stopping_warning.show()
                             g.stop_training = True
+
+                    prev_val_epoch_iou = val_epoch_iou
 
             epoch_pbar.update()
 
