@@ -403,13 +403,13 @@ batch_size_input_f = Field(
         "reducing number of weights updates required within one epoch."
     ),
 )
-patience_input = InputNumber(value=10, min=1)
+patience_input = InputNumber(value=20, min=1)
 patience_input_f = Field(
     content=patience_input,
     title="Patience",
     description="Number of validation epochs to wait for no observable improvement for early stopping of training",
 )
-validation_freq_input = InputNumber(value=5, min=1)
+validation_freq_input = InputNumber(value=1, min=1)
 validation_freq_input_f = Field(
     content=validation_freq_input,
     title="Validation and checkpoint save frequency",
@@ -1177,7 +1177,7 @@ def change_loss_func(value):
     elif value == "TverskyLoss":
         loss_func_info.set(
             text=(
-                "Modification of Dice loss which allows to control the penalties for false negative and false positive "
+                "Modification of Dice loss which allows to control the penalties for false positive and false negative "
                 "types of errors with the help of alpha and beta hyperparameters, respectively. These hyperparameters "
                 "allow the tuning of the loss function to focus more on either false positives or false negatives during"
                 "  training. This capability is useful in cases where the costs of different types of segmentation errors"
