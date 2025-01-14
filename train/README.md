@@ -1,5 +1,5 @@
 <div align="center" markdown>
-<img src=""/>  
+<img src="https://github.com/user-attachments/assets/1416d5b0-0d5e-456a-9a5b-c6ddf164b6d0"/>  
 
 # Fine-tune Segment Anything 2.1
 

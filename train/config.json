@@ -18,9 +18,9 @@
     "need_gpu": true,
     "gpu": "required",
     "isolate": true,
-    "icon": "",
+    "icon": "https://github.com/user-attachments/assets/1b73bd9a-2e1a-4c87-bb6a-972202a71d86",
     "icon_cover": true,
-    "poster": "",
+    "poster": "https://github.com/user-attachments/assets/1416d5b0-0d5e-456a-9a5b-c6ddf164b6d0",
     "context_menu": {
         "target": [
             "images_project"
