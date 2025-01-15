@@ -872,6 +872,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 notify_thread.join()
             remove_dir(temp_frames_dir)
 
+    def _on_inference_start(self, inference_request_uuid: str):
+        super()._on_inference_start(inference_request_uuid)
+        self._inference_requests[inference_request_uuid]["lock"] = threading.Lock()
+
     @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
     @mock.patch("sam2.utils.misc.tqdm", notqdm)
     def _track_async(self, api: sly.Api, context: dict, request_uuid: str = None):
