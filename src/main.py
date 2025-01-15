@@ -1026,6 +1026,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         )
         notify_thread.start()
 
+        video_predictor = None
+        inference_state = None
         api.logger.info("Start tracking.")
         try:
             temp_frames_dir = f"frames/{rand_str(10)}"
