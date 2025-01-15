@@ -1041,7 +1041,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.cache.download_frames_to_paths(
                 api,
                 video_id,
-                list(range(frame_index, frame_index+frames_count*direction_n, direction_n)),
+                list(range(frame_index, frame_index+(frames_count+1)*direction_n, direction_n)),
                 [f"{temp_frames_dir}/{i}.jpg" for i in range(frames_count + 1)],
                 progress_cb=_download_progress_cb,
             )
