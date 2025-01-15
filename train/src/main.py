@@ -1237,7 +1237,7 @@ def preview_prompt():
         cv2.circle(
             img=bitmap,
             center=(point[0], point[1]),
-            radius=4,
+            radius=6,
             color=(255, 0, 0),
             thickness=-1,
         )
