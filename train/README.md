@@ -6,6 +6,7 @@
 <p align="center">
   <a href="#Overview">Overview</a> •
   <a href="#How-To-Run">How To Run</a> •
+  <a href="#How-To-Use-Your-Trained-Model-Outside-Supervisely">How To Use Your Trained Model Outside Supervisely</a> •
   <a href="#Screenshot">Screenshot</a> •
   <a href="#Acknowledgment">Acknowledgment</a>
 </p>
@@ -31,10 +32,16 @@ This app allows you to fine-tune SAM 2 on custom dataset. You can define model c
 # How To Run
 
 Select images project, select GPU device in "Agent" field, click on `RUN` button:
+
+https://github.com/user-attachments/assets/2118b8cb-1046-4268-ba79-baa1a8e35938
+
+# How To Use Your Trained Model Outside Supervisely
+
+You can use your trained models outside Supervisely platform. See this [Jupyter Notebook](https://github.com/supervisely-ecosystem/serve-segment-anything-2/blob/master/train/outside_supervisely/inference_outside_supervisely.ipynb) for details.
   
 # Screenshot
 
-
+![fine-tune-sam2-screen](https://github.com/user-attachments/assets/b6bfecbc-2508-4eab-8455-b825f3c91ef8)
 
 # Acknowledgment
 
