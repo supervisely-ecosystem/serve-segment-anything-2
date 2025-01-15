@@ -1094,7 +1094,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 # skip first frame prediction
                 if out_frame_idx == 0:
                     continue
-                frame_index = frame_index + out_frame_idx * direction
+                frame_index = frame_index + out_frame_idx * direction_n
                 for figure_id, masks in zip(out_obj_ids, out_mask_logits):
                     masks = (masks > 0.0).cpu().numpy()
                     for i, mask in enumerate(masks):
