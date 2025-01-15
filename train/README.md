@@ -33,7 +33,9 @@ This app allows you to fine-tune SAM 2 on custom dataset. You can define model c
 
 Select images project, select GPU device in "Agent" field, click on `RUN` button:
 
-https://github.com/user-attachments/assets/2118b8cb-1046-4268-ba79-baa1a8e35938
+<video width="100%" preload="auto" autoplay muted loop>
+    <source src="https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/untagged-0535751fccc51c9f9cd7/start_fine-tune-sam2.mp4" type="video/mp4">
+</video>
 
 # How To Use Your Trained Model Outside Supervisely
 
