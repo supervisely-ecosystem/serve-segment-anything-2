@@ -646,7 +646,7 @@ preview_image_widget = SlyImage()
 preview_image_f = Field(content=preview_image_widget, title="input image")
 preview_mask_widget = SlyImage()
 preview_mask_f = Field(
-    content=preview_mask_widget, title="binarized mask with point and box prompts"
+    content=preview_mask_widget, title="binarized mask with point prompts"
 )
 previews_container = Container(
     widgets=[preview_image_f, preview_mask_f, Empty()],
