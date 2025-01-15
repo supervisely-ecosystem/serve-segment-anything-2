@@ -15,6 +15,6 @@ else:
 
 train_artifacts_dir = os.path.join(app_data_dir, "artifacts")
 if not os.path.exists(train_artifacts_dir):
-    os.mkdir(train_artifacts_dir)
+    os.makedirs(train_artifacts_dir)
 
 stop_training = False
