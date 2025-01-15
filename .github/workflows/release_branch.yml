@@ -20,4 +20,4 @@ jobs:
       RELEASE_VERSION: "${{ github.ref_name }}"
       RELEASE_DESCRIPTION: "'${{ github.ref_name }}' branch release"
       RELEASE_TYPE: "release-branch"
-      SUBAPP_PATHS: "__ROOT_APP__"
+      SUBAPP_PATHS: "__ROOT_APP__, train"

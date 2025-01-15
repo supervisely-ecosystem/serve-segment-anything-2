@@ -16,4 +16,4 @@ jobs:
       RELEASE_VERSION: ""
       RELEASE_DESCRIPTION: ""
       RELEASE_TYPE: "publish"
-      SUBAPP_PATHS: "__ROOT_APP__"
+      SUBAPP_PATHS: "__ROOT_APP__, train"
