@@ -941,6 +941,15 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             nonlocal global_stop_indicatior
             try:
                 while True:
+                    if global_stop_indicatior:
+                        return
+                    if inference_request["cancel_inference"]:
+                        logger.info(
+                            "Cancelling inference project...",
+                            extra={"inference_request_uuid": request_uuid},
+                        )
+                        global_stop_indicatior = True
+                        return
                     items = []  # (geometry, object_id, frame_index)
                     while not q.empty():
                         items.append(q.get_nowait())
@@ -955,9 +964,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                                 min(item[2] for item in object_items),
                                 max(item[2] for item in object_items),
                             ]
-                            progress.iters_done(len(object_items))
+                            progress.iters_done_report(len(object_items))
                             if direct_progress:
-                                api.logger.debug("notifying")
                                 api.vid_ann_tool.set_direct_tracking_progress(
                                     session_id,
                                     video_id,
@@ -976,10 +984,19 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 global_stop_indicatior = True
                 raise
 
-        def _upload_loop(q: Queue, notify_q: Queue, stop_event: threading.Event):
+        def _upload_loop(q: Queue, notify_q: Queue, stop_event: threading.Event, stop_notify_event: threading.Event):
             nonlocal global_stop_indicatior
             try:
                 while True:
+                    if global_stop_indicatior:
+                        return
+                    if inference_request["cancel_inference"]:
+                        logger.info(
+                            "Cancelling inference project...",
+                            extra={"inference_request_uuid": request_uuid},
+                        )
+                        global_stop_indicatior = True
+                        return
                     items = []  # (geometry, object_id, frame_index)
                     while not q.empty():
                         items.append(q.get_nowait())
@@ -988,16 +1005,15 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                             figure_id = uuid.uuid5(
                                 namespace=uuid.NAMESPACE_URL, name=f"{time.time()}"
                             ).hex
-                            api.logger.debug("_add_to_inference_request")
                             _add_to_inference_request(*item, figure_id)
-                            if direct_progress:
-                                api.logger.debug("put to notify queue")
-                                notify_q.put(item)
+                            notify_q.put(item)
 
                     elif stop_event.is_set():
+                        stop_notify_event.set()
                         return
             except Exception as e:
                 api.logger.error("Error in upload loop: %s", str(e), exc_info=True)
+                stop_notify_event.set()
                 global_stop_indicatior = True
                 raise
 
@@ -1017,9 +1033,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         upload_queue = Queue()
         notify_queue = Queue()
         stop_upload_event = threading.Event()
+        stop_notify_event = threading.Event()
         upload_thread = threading.Thread(
             target=_upload_loop,
-            args=[upload_queue, notify_queue, stop_upload_event],
+            args=[upload_queue, notify_queue, stop_upload_event, stop_notify_event],
             daemon=True,
         )
         upload_thread.start()
@@ -1091,6 +1108,15 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 out_obj_ids,
                 out_mask_logits,
             ) in video_predictor.propagate_in_video(inference_state):
+                if global_stop_indicatior:
+                    return
+                if inference_request["cancel_inference"]:
+                    logger.info(
+                        "Cancelling inference project...",
+                        extra={"inference_request_uuid": request_uuid},
+                    )
+                    global_stop_indicatior = True
+                    return
                 # skip first frame prediction
                 if out_frame_idx == 0:
                     continue
@@ -1101,11 +1127,19 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         sly_geometry = sly.Bitmap(mask, extra_validation=False)
                         obj_id = figure_id_to_object_id[figure_id]
                         upload_queue.put((sly_geometry, obj_id, cur_frame_index))
-        except Exception:
-            stop_upload_event.set()
+
+        except Exception as e:
+            if direct_progress:
+                api.vid_ann_tool.set_direct_tracking_error(
+                    session_id,
+                    video_id,
+                    track_id,
+                    message=f"An error occured during tracking. Error: {e}",
+                )
+            error = True
             raise
         else:
-            sly.logger.info("Successfully finished tracking process", extra=log_extra)
+            error = False
         finally:
             if video_predictor is not None and inference_state is not None:
                 # reset predictor state
@@ -1114,8 +1148,15 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             stop_upload_event.set()
             if upload_thread.is_alive():
                 upload_thread.join()
+            stop_notify_event.set()
             if notify_thread.is_alive():
                 notify_thread.join()
+            if error:
+                progress.message = "Error occured during tracking"
+                progress.set(current=0, total=1, report=True)
+            else:
+                progress.message = "Ready"
+                progress.set(current=0, total=1, report=True)
 
     def serve(self):
         super().serve()
@@ -1430,6 +1471,20 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             )
             sly.logger.debug("Sending inference delta results with uuid:", extra=log_extra)
             return inference_request_copy
+
+        @server.post("/stop_tracking")
+        @server.post("/stop_inference")
+        def stop_inference(response: Response, request: Request):
+            inference_request_uuid = request.state.state.get("inference_request_uuid")
+            if inference_request_uuid is None:
+                response.status_code = status.HTTP_400_BAD_REQUEST
+                return {
+                    "message": "Error: 'inference_request_uuid' is required.",
+                    "success": False,
+                }
+            inference_request = self._inference_requests[inference_request_uuid]
+            inference_request["cancel_inference"] = True
+            return {"message": "Inference will be stopped.", "success": True}
 
         def send_error_data(func):
             @functools.wraps(func)
