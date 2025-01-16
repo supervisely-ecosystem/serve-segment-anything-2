@@ -1474,7 +1474,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         @server.post("/stop_tracking")
         def stop_tracking(response: Response, request: Request):
-            inference_request_uuid = request.state.state.get("inference_request_uuid")
+            inference_request_uuid = request.state.context.get("inference_request_uuid")
             if inference_request_uuid is None:
                 response.status_code = status.HTTP_400_BAD_REQUEST
                 return {
