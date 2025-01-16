@@ -1837,7 +1837,7 @@ def start_training():
                         best_val_iou = val_epoch_iou
                         best_val_epoch = epoch
 
-                    if val_epoch_iou > prev_val_epoch_iou:
+                    if round(val_epoch_iou, 2) > round(prev_val_epoch_iou, 2):
                         no_improvements = 0
                     else:
                         no_improvements += 1
