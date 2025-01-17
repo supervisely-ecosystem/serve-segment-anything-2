@@ -1418,7 +1418,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     "inference_request_uuid": inference_request_uuid,
                     "pending_results_len": len(inference_request["pending_results"]),
                     "pending_results": [
-                        figure._asdict() for figure in inference_request["pending_results"][:3]
+                        {"id": figure.id, "object_id": figure.object_id, "frame_index": figure.frame_index} for figure in inference_request["pending_results"]
                     ],
                 },
             )
