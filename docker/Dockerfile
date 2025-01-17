@@ -29,4 +29,4 @@ RUN curl -L -o /sam2.1_weights/sam2.1_hiera_large.pt "https://dl.fbaipublicfiles
 
 RUN pip3 install git+https://github.com/supervisely/supervisely.git@tracking-no-api
 # RUN pip3 install supervisely==6.73.233
-LABEL python_sdk_version=6.73.233
+LABEL python_sdk_version=6.73.275
