@@ -889,6 +889,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         direction = context.get("direction", "forward")
         direction_n = 1 if direction == "forward" else -1
         figures = context["figures"]
+        for i, figure in enumerate(figures):
+            if ApiField.ID not in figure:
+                figure[ApiField.ID] = i
         figures = [api.video.figure._convert_json_info(figure) for figure in figures]
         figure_id_to_object_id = {figure.id: figure.object_id for figure in figures}
         progress: sly.Progress = inference_request["progress"]
