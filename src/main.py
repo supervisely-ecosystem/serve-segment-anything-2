@@ -879,9 +879,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
     @mock.patch("sam2.utils.misc.tqdm", notqdm)
     def _track_async(self, api: sly.Api, context: dict, request_uuid: str = None):
-        api.logger.info("context", extra=context)
         inference_request = self._inference_requests[request_uuid]
-
         session_id = context.get("session_id", context["sessionId"])
         direct_progress = context.get("useDirectProgressMessages", False)
         frame_index = context["frameIndex"]
@@ -1011,6 +1009,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     elif stop_event.is_set():
                         stop_notify_event.set()
                         return
+                    time.sleep(0.1)
             except Exception as e:
                 api.logger.error("Error in upload loop: %s", str(e), exc_info=True)
                 stop_notify_event.set()
@@ -1063,6 +1062,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 progress_cb=_download_progress_cb,
             )
 
+
+            api.logger.debug("Initializing model...")
             # initialize model1
             video_predictor = build_sam2_video_predictor(self.config, self.weights_path)
             inference_state = video_predictor.init_state(video_path=temp_frames_dir)
@@ -1101,7 +1102,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
                     box=bbox,
                 )
-
+            
+            api.logger.debug("Tracking...")
             # run propagation throughout the video
             for (
                 out_frame_idx,
@@ -1365,9 +1367,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         def track_async(response: Response, request: Request):
             sly.logger.debug(f"'track_async' request in json format:{request.state.context}")
             # check batch size
-            batch_size = request.state.context.get("batch_size", None)
-            if batch_size is None:
-                batch_size = self.get_batch_size()
+            batch_size = request.state.context.get("batch_size", self.get_batch_size())
             if self.max_batch_size is not None and batch_size > self.max_batch_size:
                 response.status_code = status.HTTP_400_BAD_REQUEST
                 return {
@@ -1484,6 +1484,19 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             inference_request = self._inference_requests[inference_request_uuid]
             inference_request["cancel_inference"] = True
             return {"message": "Inference will be stopped.", "success": True}
+
+        @server.post("/clear_tracking_results")
+        def clear_tracking_results(request: Request, response: Response):
+            context = request.state.context
+            inference_request_uuid = context.get("inference_request_uuid", None)
+            if inference_request_uuid is None:
+                response.status_code = status.HTTP_400_BAD_REQUEST
+                sly.logger.error("Error: 'inference_request_uuid' is required.")
+                return {"message": "Error: 'inference_request_uuid' is required."}
+
+            del self._inference_requests[inference_request_uuid]
+            logger.debug("Removed an inference request:", extra={"uuid": inference_request_uuid})
+            return {"success": True}
 
         def send_error_data(func):
             @functools.wraps(func)
