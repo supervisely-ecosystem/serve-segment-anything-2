@@ -1449,10 +1449,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 else:
                     inference_request["pending_results"] = []
 
-            sly.logger.debug(
-                "inference_request_copy", extra={"inference_request_copy": inference_request_copy}
-            )
-
             inference_request_copy["pending_results"] = [
                 {
                     ApiField.ID: figure.id,
@@ -1463,10 +1459,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 }
                 for figure in inference_request_copy["pending_results"]
             ]
-
-            sly.logger.debug(
-                "inference_request_copy", extra={"inference_request_copy": inference_request_copy}
-            )
 
             # Logging
             log_extra = _get_log_extra_for_inference_request(
