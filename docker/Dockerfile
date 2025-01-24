@@ -28,6 +28,5 @@ RUN curl -L -o /sam2.1_weights/sam2.1_hiera_small.pt "https://dl.fbaipublicfiles
 RUN curl -L -o /sam2.1_weights/sam2.1_hiera_base_plus.pt "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt"
 RUN curl -L -o /sam2.1_weights/sam2.1_hiera_large.pt "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt"
 
-RUN pip3 install git+https://github.com/supervisely/supervisely.git@tracking-no-api
-# RUN pip3 install supervisely==6.73.233
-LABEL python_sdk_version=6.73.275
+RUN python3 -m pip install supervisely==6.73.286
+LABEL python_sdk_version=6.73.286
