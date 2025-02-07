@@ -62,3 +62,5 @@ point_coordinates: # coordinates of input points (only for points and combined m
 point_labels: # labels of input points (only for points and combined mode)
 - label_1
 - label_2
+
+rectangle: None
