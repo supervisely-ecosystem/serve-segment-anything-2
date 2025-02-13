@@ -323,7 +323,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             point_labels = settings["point_labels"]
             point_labels = np.array(point_labels)
             # set class name
-            if settings["points_class_name"]:
+            if settings["points_class_name"] not in [None, "None"]:
                 class_name = settings["points_class_name"]
             else:
                 class_name = self.class_names[0]
