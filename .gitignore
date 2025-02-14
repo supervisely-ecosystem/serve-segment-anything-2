@@ -7,3 +7,5 @@ frames/
 app_data/
 .venv/
 train/tempfiles/
+tests/
+test_results/

@@ -176,12 +176,12 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         if device != "cpu":
             if device == "cuda":
                 torch.cuda.set_device(0)
-                torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
-                if torch.cuda.get_device_properties(0).major >= 8:
-                    torch.backends.cuda.matmul.allow_tf32 = True
-                    torch.backends.cudnn.allow_tf32 = True
             else:
                 torch.cuda.set_device(int(device[-1]))
+            torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
+            if torch.cuda.get_device_properties(0).major >= 8:
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
             torch_device = torch.device(device)
             self.sam.to(device=torch_device)
         else:
@@ -224,7 +224,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     def set_image_data(self, input_image, settings):
         if settings["input_image_id"] != self.previous_image_id:
             if settings["input_image_id"] not in self.model_cache:
-                self.predictor.set_image(input_image)
+                with torch.inference_mode(), torch.autocast(
+                    "cuda", dtype=torch.bfloat16
+                ):
+                    self.predictor.set_image(input_image)
                 self.model_cache.set(
                     settings["input_image_id"],
                     {
@@ -307,12 +310,13 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.set_image_data(input_image, settings)
             self.previous_image_id = settings["input_image_id"]
             # get predicted mask
-            masks, _, _ = self.predictor.predict(
-                point_coords=None,
-                point_labels=None,
-                box=bbox_coordinates[None, :],
-                multimask_output=False,
-            )
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                masks, _, _ = self.predictor.predict(
+                    point_coords=None,
+                    point_labels=None,
+                    box=bbox_coordinates[None, :],
+                    multimask_output=False,
+                )
             mask = masks[0]
             predictions.append(sly.nn.PredictionMask(class_name=class_name, mask=mask))
         elif settings["mode"] == "points":
@@ -339,18 +343,24 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.previous_image_id = settings["input_image_id"]
             # get predicted masks
             if len(point_labels) > 1:
-                masks, _, _ = self.predictor.predict(
-                    point_coords=point_coordinates,
-                    point_labels=point_labels,
-                    multimask_output=False,
-                )
+                with torch.inference_mode(), torch.autocast(
+                    "cuda", dtype=torch.bfloat16
+                ):
+                    masks, _, _ = self.predictor.predict(
+                        point_coords=point_coordinates,
+                        point_labels=point_labels,
+                        multimask_output=False,
+                    )
                 mask = masks[0]
             else:
-                masks, scores, logits = self.predictor.predict(
-                    point_coords=point_coordinates,
-                    point_labels=point_labels,
-                    multimask_output=True,
-                )
+                with torch.inference_mode(), torch.autocast(
+                    "cuda", dtype=torch.bfloat16
+                ):
+                    masks, scores, logits = self.predictor.predict(
+                        point_coords=point_coordinates,
+                        point_labels=point_labels,
+                        multimask_output=True,
+                    )
                 max_score_ind = np.argmax(scores)
                 mask = masks[max_score_ind]
             predictions.append(sly.nn.PredictionMask(class_name=class_name, mask=mask))
@@ -379,7 +389,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 self._model_meta = self._model_meta.add_obj_class(new_class)
             # generate image embedding - model will remember this embedding and use it for subsequent mask prediction
             self.set_image_data(input_image, settings)
-            init_mask = settings["init_mask"]
+            init_mask = settings.get("init_mask")
             # get predicted masks
             if (
                 settings["input_image_id"] in self.model_cache
@@ -396,21 +406,27 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     "mask_input"
                 ]
                 if len(point_labels) > 1:
-                    masks, scores, logits = self.predictor.predict(
-                        point_coords=point_coordinates,
-                        point_labels=point_labels,
-                        box=bbox_coordinates[None, :],
-                        mask_input=mask_input[None, :, :],
-                        multimask_output=False,
-                    )
+                    with torch.inference_mode(), torch.autocast(
+                        "cuda", dtype=torch.bfloat16
+                    ):
+                        masks, scores, logits = self.predictor.predict(
+                            point_coords=point_coordinates,
+                            point_labels=point_labels,
+                            box=bbox_coordinates[None, :],
+                            mask_input=mask_input[None, :, :],
+                            multimask_output=False,
+                        )
                 else:
-                    masks, scores, logits = self.predictor.predict(
-                        point_coords=point_coordinates,
-                        point_labels=point_labels,
-                        box=bbox_coordinates[None, :],
-                        mask_input=mask_input[None, :, :],
-                        multimask_output=True,
-                    )
+                    with torch.inference_mode(), torch.autocast(
+                        "cuda", dtype=torch.bfloat16
+                    ):
+                        masks, scores, logits = self.predictor.predict(
+                            point_coords=point_coordinates,
+                            point_labels=point_labels,
+                            box=bbox_coordinates[None, :],
+                            mask_input=mask_input[None, :, :],
+                            multimask_output=True,
+                        )
                     max_score_ind = np.argmax(scores)
                     masks = [masks[max_score_ind]]
             elif init_mask is not None:
