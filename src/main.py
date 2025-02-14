@@ -248,6 +248,12 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     def predict(
         self, image_path: str, settings: Dict[str, Any]
     ) -> List[sly.nn.PredictionMask]:
+
+        torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
+        if torch.cuda.get_device_properties(0).major >= 8:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
         # prepare input data
         input_image = sly.image.read(image_path)
         # list for storing preprocessed masks
