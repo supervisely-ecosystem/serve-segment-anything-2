@@ -245,15 +245,16 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         geometry_json = data["data"]
         return sly.deserialize_geometry(geometry_type_str, geometry_json)
 
-    def predict(
-        self, image_path: str, settings: Dict[str, Any]
-    ) -> List[sly.nn.PredictionMask]:
-
+    def set_cuda_properties(self):
         torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
         if torch.cuda.get_device_properties(0).major >= 8:
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
 
+    def predict(
+        self, image_path: str, settings: Dict[str, Any]
+    ) -> List[sly.nn.PredictionMask]:
+        self.set_cuda_properties()
         # prepare input data
         input_image = sly.image.read(image_path)
         # list for storing preprocessed masks
@@ -316,13 +317,12 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.set_image_data(input_image, settings)
             self.previous_image_id = settings["input_image_id"]
             # get predicted mask
-            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                masks, _, _ = self.predictor.predict(
-                    point_coords=None,
-                    point_labels=None,
-                    box=bbox_coordinates[None, :],
-                    multimask_output=False,
-                )
+            masks, _, _ = self.predictor.predict(
+                point_coords=None,
+                point_labels=None,
+                box=bbox_coordinates[None, :],
+                multimask_output=False,
+            )
             mask = masks[0]
             predictions.append(sly.nn.PredictionMask(class_name=class_name, mask=mask))
         elif settings["mode"] == "points":
@@ -349,24 +349,18 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.previous_image_id = settings["input_image_id"]
             # get predicted masks
             if len(point_labels) > 1:
-                with torch.inference_mode(), torch.autocast(
-                    "cuda", dtype=torch.bfloat16
-                ):
-                    masks, _, _ = self.predictor.predict(
-                        point_coords=point_coordinates,
-                        point_labels=point_labels,
-                        multimask_output=False,
-                    )
+                masks, _, _ = self.predictor.predict(
+                    point_coords=point_coordinates,
+                    point_labels=point_labels,
+                    multimask_output=False,
+                )
                 mask = masks[0]
             else:
-                with torch.inference_mode(), torch.autocast(
-                    "cuda", dtype=torch.bfloat16
-                ):
-                    masks, scores, logits = self.predictor.predict(
-                        point_coords=point_coordinates,
-                        point_labels=point_labels,
-                        multimask_output=True,
-                    )
+                masks, scores, logits = self.predictor.predict(
+                    point_coords=point_coordinates,
+                    point_labels=point_labels,
+                    multimask_output=True,
+                )
                 max_score_ind = np.argmax(scores)
                 mask = masks[max_score_ind]
             predictions.append(sly.nn.PredictionMask(class_name=class_name, mask=mask))
@@ -412,27 +406,21 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     "mask_input"
                 ]
                 if len(point_labels) > 1:
-                    with torch.inference_mode(), torch.autocast(
-                        "cuda", dtype=torch.bfloat16
-                    ):
-                        masks, scores, logits = self.predictor.predict(
-                            point_coords=point_coordinates,
-                            point_labels=point_labels,
-                            box=bbox_coordinates[None, :],
-                            mask_input=mask_input[None, :, :],
-                            multimask_output=False,
-                        )
+                    masks, scores, logits = self.predictor.predict(
+                        point_coords=point_coordinates,
+                        point_labels=point_labels,
+                        box=bbox_coordinates[None, :],
+                        mask_input=mask_input[None, :, :],
+                        multimask_output=False,
+                    )
                 else:
-                    with torch.inference_mode(), torch.autocast(
-                        "cuda", dtype=torch.bfloat16
-                    ):
-                        masks, scores, logits = self.predictor.predict(
-                            point_coords=point_coordinates,
-                            point_labels=point_labels,
-                            box=bbox_coordinates[None, :],
-                            mask_input=mask_input[None, :, :],
-                            multimask_output=True,
-                        )
+                    masks, scores, logits = self.predictor.predict(
+                        point_coords=point_coordinates,
+                        point_labels=point_labels,
+                        box=bbox_coordinates[None, :],
+                        mask_input=mask_input[None, :, :],
+                        multimask_output=True,
+                    )
                     max_score_ind = np.argmax(scores)
                     masks = [masks[max_score_ind]]
             elif init_mask is not None:
@@ -571,6 +559,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
     @mock.patch("sam2.utils.misc.tqdm", notqdm)
     def _track_api(self, api: sly.Api, context: dict):
+        self.set_cuda_properties()
         # TODO: Add clicks support
         video_id = context["videoId"]
         start_frame = context["frameIndex"]
@@ -677,6 +666,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         api: sly.Api,
         context: Dict,
     ):
+        self.set_cuda_properties()
         video_id = context["videoId"]
         track_id = context["trackId"]
         n_frames = context["frames"]
@@ -937,6 +927,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
     @mock.patch("sam2.utils.misc.tqdm", notqdm)
     def _track_async(self, api: sly.Api, context: dict, request_uuid: str = None):
+        self.set_cuda_properties()
         inference_request = self._inference_requests[request_uuid]
         session_id = context.get("session_id", context["sessionId"])
         direct_progress = context.get("useDirectProgressMessages", False)
