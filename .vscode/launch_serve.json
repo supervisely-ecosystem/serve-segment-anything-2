@@ -16,12 +16,12 @@
                 "websockets"
             ],
             "jinja": true,
-            "justMyCode": true,
+            "justMyCode": false,
             "env": {
                 "PYTHONPATH": "${workspaceFolder}:${PYTHONPATH}",
                 "LOG_LEVEL": "DEBUG",
-                "ENV": "production",
-                "TEAM_ID": "438",
+                "ENV": "development",
+                "TEAM_ID": "4",
                 "DEBUG_WITH_SLY_NET": "1",
                 "SLY_APP_DATA_DIR": "app_data"
             }

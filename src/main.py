@@ -110,17 +110,53 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         config = models_data[selected_model]["config"]
         return weights_path, config
 
+    def get_models_table_row_idx_and_config(self, weights_path):
+        if weights_path.endswith("tiny.pt"):
+            idx = 0
+            config = "configs/sam2.1/sam2.1_hiera_t.yaml"
+        elif weights_path.endswith("small.pt"):
+            idx = 1
+            config = "configs/sam2.1/sam2.1_hiera_s.yaml"
+        elif weights_path.endswith("base_plus.pt"):
+            idx = 2
+            config = "configs/sam2.1/sam2.1_hiera_b+.yaml"
+        elif weights_path.endswith("large.pt"):
+            idx = 3
+            config = "configs/sam2.1/sam2.1_hiera_l.yaml"
+        return idx, config
+
     def load_on_device(
         self,
-        model_dir: str,
+        model_dir: str = "app_data",
         device: Literal["cpu", "cuda", "cuda:0", "cuda:1", "cuda:2", "cuda:3"] = "cpu",
+        from_api=False,
+        model_source=None,
+        weights_path=None,
+        config=None,
+        custom_link=None,
     ):
-        model_source = self.gui.get_model_source()
+        if not from_api:
+            model_source = self.gui.get_model_source()
         if model_source == "Pretrained models":
             # get weights path and config
-            self.weights_path, self.config = self.get_weights_path_and_config()
+            if from_api:
+                self.weights_path = weights_path
+                row_idx, self.config = self.get_models_table_row_idx_and_config(
+                    weights_path
+                )
+                self.gui._models_table.select_row(row_idx)
+            else:
+                self.weights_path, self.config = self.get_weights_path_and_config()
+                if sly.is_development():
+                    self.weights_path = "." + self.weights_path
         elif model_source == "Custom models":
-            custom_link = self.gui.get_custom_link()
+            if not from_api:
+                custom_link = self.gui.get_custom_link()
+            else:
+                self.gui._tabs.set_active_tab("Custom models")
+                self.gui._model_path_input.set_value(custom_link)
+                file_info = api.file.get_info_by_path(sly.env.team_id(), custom_link)
+                self.gui._file_thumbnail.set(file_info)
             weights_file_name = os.path.basename(custom_link)
             self.weights_path = os.path.join(model_dir, weights_file_name)
             if not sly.fs.file_exists(self.weights_path):
@@ -128,20 +164,24 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     src_path=custom_link,
                     dst_path=self.weights_path,
                 )
-            self.config = self.select_config.get_value()
-            self.config = "configs/sam2.1/" + self.config
+            if from_api:
+                self.config = config
+                self.select_config.set_value(config.split("/")[2])
+            else:
+                self.config = self.select_config.get_value()
+                self.config = "configs/sam2.1/" + self.config
         # build model
         self.sam = build_sam2(self.config, self.weights_path, device=device)
         # load model on device
         if device != "cpu":
             if device == "cuda":
                 torch.cuda.set_device(0)
-                torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
-                if torch.cuda.get_device_properties(0).major >= 8:
-                    torch.backends.cuda.matmul.allow_tf32 = True
-                    torch.backends.cudnn.allow_tf32 = True
             else:
                 torch.cuda.set_device(int(device[-1]))
+            torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
+            if torch.cuda.get_device_properties(0).major >= 8:
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
             torch_device = torch.device(device)
             self.sam.to(device=torch_device)
         else:
@@ -184,7 +224,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     def set_image_data(self, input_image, settings):
         if settings["input_image_id"] != self.previous_image_id:
             if settings["input_image_id"] not in self.model_cache:
-                self.predictor.set_image(input_image)
+                with torch.inference_mode(), torch.autocast(
+                    "cuda", dtype=torch.bfloat16
+                ):
+                    self.predictor.set_image(input_image)
                 self.model_cache.set(
                     settings["input_image_id"],
                     {
@@ -202,9 +245,16 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         geometry_json = data["data"]
         return sly.deserialize_geometry(geometry_type_str, geometry_json)
 
+    def set_cuda_properties(self):
+        torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
+        if torch.cuda.get_device_properties(0).major >= 8:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
     def predict(
         self, image_path: str, settings: Dict[str, Any]
     ) -> List[sly.nn.PredictionMask]:
+        self.set_cuda_properties()
         # prepare input data
         input_image = sly.image.read(image_path)
         # list for storing preprocessed masks
@@ -283,7 +333,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             point_labels = settings["point_labels"]
             point_labels = np.array(point_labels)
             # set class name
-            if settings["points_class_name"]:
+            if settings["points_class_name"] not in [None, "None"]:
                 class_name = settings["points_class_name"]
             else:
                 class_name = self.class_names[0]
@@ -339,7 +389,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 self._model_meta = self._model_meta.add_obj_class(new_class)
             # generate image embedding - model will remember this embedding and use it for subsequent mask prediction
             self.set_image_data(input_image, settings)
-            init_mask = settings["init_mask"]
+            init_mask = settings.get("init_mask")
             # get predicted masks
             if (
                 settings["input_image_id"] in self.model_cache
@@ -509,6 +559,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
     @mock.patch("sam2.utils.misc.tqdm", notqdm)
     def _track_api(self, api: sly.Api, context: dict):
+        self.set_cuda_properties()
         # TODO: Add clicks support
         video_id = context["videoId"]
         start_frame = context["frameIndex"]
@@ -615,6 +666,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         api: sly.Api,
         context: Dict,
     ):
+        self.set_cuda_properties()
         video_id = context["videoId"]
         track_id = context["trackId"]
         n_frames = context["frames"]
@@ -875,6 +927,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
     @mock.patch("sam2.utils.misc.tqdm", notqdm)
     def _track_async(self, api: sly.Api, context: dict, request_uuid: str = None):
+        self.set_cuda_properties()
         inference_request = self._inference_requests[request_uuid]
         session_id = context.get("session_id", context["sessionId"])
         direct_progress = context.get("useDirectProgressMessages", False)
