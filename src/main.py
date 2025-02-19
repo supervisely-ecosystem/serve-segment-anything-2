@@ -12,7 +12,6 @@ import cv2
 import mock
 import numpy as np
 import supervisely as sly
-import supervisely.app.development as sly_app_development
 import torch
 from cacheout import Cache
 from cachetools import LRUCache
@@ -182,12 +181,13 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if torch.cuda.get_device_properties(0).major >= 8:
                 torch.backends.cuda.matmul.allow_tf32 = True
                 torch.backends.cudnn.allow_tf32 = True
-            torch_device = torch.device(device)
-            self.sam.to(device=torch_device)
+            self.torch_device = torch.device(device)
+            self.sam.to(device=self.torch_device)
         else:
             self.sam.to(device=device)
         # build predictor
         self.predictor = SAM2ImagePredictor(self.sam)
+        self.video_predictor = None
         # define class names
         self.class_names = ["object_mask"]
         # list for storing mask colors
@@ -228,15 +228,30 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     "cuda", dtype=torch.bfloat16
                 ):
                     self.predictor.set_image(input_image)
+                cache_features = self.predictor._features.copy()
+                cache_features["image_embed"] = (
+                    cache_features["image_embed"].detach().cpu()
+                )
+                cache_features["high_res_feats"] = [
+                    element.detach().cpu()
+                    for element in cache_features["high_res_feats"]
+                ]
                 self.model_cache.set(
                     settings["input_image_id"],
                     {
-                        "features": self.predictor._features,
+                        "features": cache_features,
                         "original_size": self.predictor._orig_hw,
                     },
                 )
             else:
                 cached_data = self.model_cache.get(settings["input_image_id"])
+                cached_data["features"]["image_embed"] = cached_data["features"][
+                    "image_embed"
+                ].to(self.torch_device)
+                cached_data["features"]["high_res_feats"] = [
+                    element.to(self.torch_device)
+                    for element in cached_data["features"]["high_res_feats"]
+                ]
                 self.predictor._features = cached_data["features"]
                 self.predictor._orig_hw = cached_data["original_size"]
 
@@ -280,7 +295,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 min_mask_region_area=settings["min_mask_region_area"],
                 output_mode=settings["output_mode"],
             )
-            masks = mask_generator.generate(input_image)
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                masks = mask_generator.generate(input_image)
             for i, mask in enumerate(masks):
                 # get predicted mask
                 mask = mask["segmentation"]
@@ -317,12 +333,13 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.set_image_data(input_image, settings)
             self.previous_image_id = settings["input_image_id"]
             # get predicted mask
-            masks, _, _ = self.predictor.predict(
-                point_coords=None,
-                point_labels=None,
-                box=bbox_coordinates[None, :],
-                multimask_output=False,
-            )
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                masks, _, _ = self.predictor.predict(
+                    point_coords=None,
+                    point_labels=None,
+                    box=bbox_coordinates[None, :],
+                    multimask_output=False,
+                )
             mask = masks[0]
             predictions.append(sly.nn.PredictionMask(class_name=class_name, mask=mask))
         elif settings["mode"] == "points":
@@ -348,21 +365,22 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.set_image_data(input_image, settings)
             self.previous_image_id = settings["input_image_id"]
             # get predicted masks
-            if len(point_labels) > 1:
-                masks, _, _ = self.predictor.predict(
-                    point_coords=point_coordinates,
-                    point_labels=point_labels,
-                    multimask_output=False,
-                )
-                mask = masks[0]
-            else:
-                masks, scores, logits = self.predictor.predict(
-                    point_coords=point_coordinates,
-                    point_labels=point_labels,
-                    multimask_output=True,
-                )
-                max_score_ind = np.argmax(scores)
-                mask = masks[max_score_ind]
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                if len(point_labels) > 1:
+                    masks, _, _ = self.predictor.predict(
+                        point_coords=point_coordinates,
+                        point_labels=point_labels,
+                        multimask_output=False,
+                    )
+                    mask = masks[0]
+                else:
+                    masks, scores, logits = self.predictor.predict(
+                        point_coords=point_coordinates,
+                        point_labels=point_labels,
+                        multimask_output=True,
+                    )
+                    max_score_ind = np.argmax(scores)
+                    mask = masks[max_score_ind]
             predictions.append(sly.nn.PredictionMask(class_name=class_name, mask=mask))
         elif settings["mode"] == "combined":
             # get point coordinates
@@ -405,24 +423,27 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 mask_input = self.model_cache.get(settings["input_image_id"])[
                     "mask_input"
                 ]
-                if len(point_labels) > 1:
-                    masks, scores, logits = self.predictor.predict(
-                        point_coords=point_coordinates,
-                        point_labels=point_labels,
-                        box=bbox_coordinates[None, :],
-                        mask_input=mask_input[None, :, :],
-                        multimask_output=False,
-                    )
-                else:
-                    masks, scores, logits = self.predictor.predict(
-                        point_coords=point_coordinates,
-                        point_labels=point_labels,
-                        box=bbox_coordinates[None, :],
-                        mask_input=mask_input[None, :, :],
-                        multimask_output=True,
-                    )
-                    max_score_ind = np.argmax(scores)
-                    masks = [masks[max_score_ind]]
+                with torch.inference_mode(), torch.autocast(
+                    "cuda", dtype=torch.bfloat16
+                ):
+                    if len(point_labels) > 1:
+                        masks, scores, logits = self.predictor.predict(
+                            point_coords=point_coordinates,
+                            point_labels=point_labels,
+                            box=bbox_coordinates[None, :],
+                            mask_input=mask_input[None, :, :],
+                            multimask_output=False,
+                        )
+                    else:
+                        masks, scores, logits = self.predictor.predict(
+                            point_coords=point_coordinates,
+                            point_labels=point_labels,
+                            box=bbox_coordinates[None, :],
+                            mask_input=mask_input[None, :, :],
+                            multimask_output=True,
+                        )
+                        max_score_ind = np.argmax(scores)
+                        masks = [masks[max_score_ind]]
             elif init_mask is not None:
                 # transform
                 mask_input = self.predictor.transform.apply_image(init_mask)
@@ -439,41 +460,47 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 mask_input = mask_input.astype(float)
                 mask_input[mask_input > 0] = 20
                 mask_input[mask_input <= 0] = -20
-                if len(point_labels) > 1:
-                    masks, scores, logits = self.predictor.predict(
-                        point_coords=point_coordinates,
-                        point_labels=point_labels,
-                        box=bbox_coordinates[None, :],
-                        mask_input=mask_input[None, :, :],
-                        multimask_output=False,
-                    )
-                else:
-                    masks, scores, logits = self.predictor.predict(
-                        point_coords=point_coordinates,
-                        point_labels=point_labels,
-                        box=bbox_coordinates[None, :],
-                        mask_input=mask_input[None, :, :],
-                        multimask_output=True,
-                    )
-                    max_score_ind = np.argmax(scores)
-                    masks = [masks[max_score_ind]]
+                with torch.inference_mode(), torch.autocast(
+                    "cuda", dtype=torch.bfloat16
+                ):
+                    if len(point_labels) > 1:
+                        masks, scores, logits = self.predictor.predict(
+                            point_coords=point_coordinates,
+                            point_labels=point_labels,
+                            box=bbox_coordinates[None, :],
+                            mask_input=mask_input[None, :, :],
+                            multimask_output=False,
+                        )
+                    else:
+                        masks, scores, logits = self.predictor.predict(
+                            point_coords=point_coordinates,
+                            point_labels=point_labels,
+                            box=bbox_coordinates[None, :],
+                            mask_input=mask_input[None, :, :],
+                            multimask_output=True,
+                        )
+                        max_score_ind = np.argmax(scores)
+                        masks = [masks[max_score_ind]]
             else:
-                if len(point_labels) > 1:
-                    masks, scores, logits = self.predictor.predict(
-                        point_coords=point_coordinates,
-                        point_labels=point_labels,
-                        box=bbox_coordinates[None, :],
-                        multimask_output=False,
-                    )
-                else:
-                    masks, scores, logits = self.predictor.predict(
-                        point_coords=point_coordinates,
-                        point_labels=point_labels,
-                        box=bbox_coordinates[None, :],
-                        multimask_output=True,
-                    )
-                    max_score_ind = np.argmax(scores)
-                    masks = [masks[max_score_ind]]
+                with torch.inference_mode(), torch.autocast(
+                    "cuda", dtype=torch.bfloat16
+                ):
+                    if len(point_labels) > 1:
+                        masks, scores, logits = self.predictor.predict(
+                            point_coords=point_coordinates,
+                            point_labels=point_labels,
+                            box=bbox_coordinates[None, :],
+                            multimask_output=False,
+                        )
+                    else:
+                        masks, scores, logits = self.predictor.predict(
+                            point_coords=point_coordinates,
+                            point_labels=point_labels,
+                            box=bbox_coordinates[None, :],
+                            multimask_output=True,
+                        )
+                        max_score_ind = np.argmax(scores)
+                        masks = [masks[max_score_ind]]
             # save bbox ccordinates and mask to cache
             if settings["input_image_id"] in self.model_cache:
                 image_id = settings["input_image_id"]
@@ -603,9 +630,16 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             [f"{temp_frames_dir}/{i}.jpg" for i in range(n_frames + 1)],
         )
 
-        # initialize model1
-        video_predictor = build_sam2_video_predictor(self.config, self.weights_path)
-        inference_state = video_predictor.init_state(video_path=temp_frames_dir)
+        # initialize model
+        if not self.video_predictor:
+            self.video_predictor = build_sam2_video_predictor(
+                self.config, self.weights_path
+            )
+
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            inference_state = self.video_predictor.init_state(
+                video_path=temp_frames_dir
+            )
 
         for i, input_geom_data in enumerate(input_geometries):
             geometry = self._deserialize_geometry(input_geom_data)
@@ -632,33 +666,35 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             bbox, positive_clicks, negative_clicks, _ = smarttool_input
             if not self.use_bbox.is_switched():
                 bbox = None
-            video_predictor.add_new_points_or_box(
-                inference_state=inference_state,
-                frame_idx=0,
-                obj_id=i,
-                points=positive_clicks + negative_clicks,
-                labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
-                box=bbox,
-            )
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                self.video_predictor.add_new_points_or_box(
+                    inference_state=inference_state,
+                    frame_idx=0,
+                    obj_id=i,
+                    points=positive_clicks + negative_clicks,
+                    labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
+                    box=bbox,
+                )
 
         results = []
         # run propagation throughout the video
-        for (
-            out_frame_idx,
-            _,
-            out_mask_logits,
-        ) in video_predictor.propagate_in_video(inference_state):
-            # skip first frame prediction
-            if out_frame_idx == 0:
-                continue
-            results.append([])
-            for masks in out_mask_logits:
-                masks = (masks > 0.0).cpu().numpy()
-                sum_mask = np.any(masks, axis=0)
-                geometry = sly.Bitmap(sum_mask, extra_validation=False)
-                results[-1].append(
-                    {"type": geometry.geometry_name(), "data": geometry.to_json()}
-                )
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            for (
+                out_frame_idx,
+                _,
+                out_mask_logits,
+            ) in self.video_predictor.propagate_in_video(inference_state):
+                # skip first frame prediction
+                if out_frame_idx == 0:
+                    continue
+                results.append([])
+                for masks in out_mask_logits:
+                    masks = (masks > 0.0).cpu().numpy()
+                    sum_mask = np.any(masks, axis=0)
+                    geometry = sly.Bitmap(sum_mask, extra_validation=False)
+                    results[-1].append(
+                        {"type": geometry.geometry_name(), "data": geometry.to_json()}
+                    )
         return results
 
     def _track(
@@ -740,7 +776,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         notify_thread = threading.Thread(target=_notify_loop, daemon=True)
         notify_thread.start()
-        video_predictor = None
         inference_state = None
         upload_thread = None
         temp_frames_dir = f"frames/{track_id}"
@@ -770,9 +805,15 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 progress_cb=_progress_cb,
             )
 
-            # initialize model1
-            video_predictor = build_sam2_video_predictor(self.config, self.weights_path)
-            inference_state = video_predictor.init_state(video_path=temp_frames_dir)
+            # initialize model
+            if not self.video_predictor:
+                self.video_predictor = build_sam2_video_predictor(
+                    self.config, self.weights_path
+                )
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                inference_state = self.video_predictor.init_state(
+                    video_path=temp_frames_dir
+                )
 
             for figure in figures:
                 if figure.geometry_type != sly.Bitmap.geometry_name():
@@ -800,14 +841,17 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 bbox, positive_clicks, negative_clicks, _ = smarttool_input
                 if not self.use_bbox.is_switched():
                     bbox = None
-                video_predictor.add_new_points_or_box(
-                    inference_state=inference_state,
-                    frame_idx=0,
-                    obj_id=figure.id,
-                    points=positive_clicks + negative_clicks,
-                    labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
-                    box=bbox,
-                )
+                with torch.inference_mode(), torch.autocast(
+                    "cuda", dtype=torch.bfloat16
+                ):
+                    self.video_predictor.add_new_points_or_box(
+                        inference_state=inference_state,
+                        frame_idx=0,
+                        obj_id=figure.id,
+                        points=positive_clicks + negative_clicks,
+                        labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
+                        box=bbox,
+                    )
 
             empty_mask_notified = False
 
@@ -891,31 +935,33 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             upload_thread.start()
 
             # run propagation throughout the video
-            for (
-                out_frame_idx,
-                out_obj_ids,
-                out_mask_logits,
-            ) in video_predictor.propagate_in_video(inference_state):
-                # skip first frame prediction
-                if out_frame_idx == 0:
-                    continue
-                frame_index = start_frame + out_frame_idx * direction
-                for figure_id, masks in zip(out_obj_ids, out_mask_logits):
-                    if upload_error.is_set():
-                        raise RuntimeError(
-                            "Tracking is stopped due to an error in upload loop"
-                        )
-                    masks = (masks > 0.0).cpu().numpy()
-                    for i, mask in enumerate(masks):
-                        upload_queue.put((frame_index, figure_id, mask, i == 0))
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                for (
+                    out_frame_idx,
+                    out_obj_ids,
+                    out_mask_logits,
+                ) in self.video_predictor.propagate_in_video(inference_state):
+                    # skip first frame prediction
+                    if out_frame_idx == 0:
+                        continue
+                    frame_index = start_frame + out_frame_idx * direction
+                    for figure_id, masks in zip(out_obj_ids, out_mask_logits):
+                        if upload_error.is_set():
+                            raise RuntimeError(
+                                "Tracking is stopped due to an error in upload loop"
+                            )
+                        masks = (masks > 0.0).cpu().numpy()
+                        for i, mask in enumerate(masks):
+                            upload_queue.put((frame_index, figure_id, mask, i == 0))
+
         except Exception:
             raise
         else:
             sly.logger.info("Successfully finished tracking process", extra=log_extra)
         finally:
-            if video_predictor is not None and inference_state is not None:
+            if self.video_predictor is not None and inference_state is not None:
                 # reset predictor state
-                video_predictor.reset_state(inference_state)
+                self.video_predictor.reset_state(inference_state)
             if upload_thread is not None and upload_thread.is_alive():
                 upload_stop.set()
                 upload_thread.join()
@@ -1105,7 +1151,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         )
         notify_thread.start()
 
-        video_predictor = None
         inference_state = None
         api.logger.info("Start tracking.")
         try:
@@ -1128,9 +1173,17 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             )
 
             api.logger.debug("Initializing model...")
-            # initialize model1
-            video_predictor = build_sam2_video_predictor(self.config, self.weights_path)
-            inference_state = video_predictor.init_state(video_path=temp_frames_dir)
+            # initialize model
+
+            if not self.video_predictor:
+                self.video_predictor = build_sam2_video_predictor(
+                    self.config, self.weights_path
+                )
+
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                inference_state = self.video_predictor.init_state(
+                    video_path=temp_frames_dir
+                )
 
             for figure in figures:
                 if figure.geometry_type != sly.Bitmap.geometry_name():
@@ -1158,41 +1211,45 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 bbox, positive_clicks, negative_clicks, _ = smarttool_input
                 if not self.use_bbox.is_switched():
                     bbox = None
-                video_predictor.add_new_points_or_box(
-                    inference_state=inference_state,
-                    frame_idx=0,
-                    obj_id=figure.id,
-                    points=positive_clicks + negative_clicks,
-                    labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
-                    box=bbox,
-                )
+                with torch.inference_mode(), torch.autocast(
+                    "cuda", dtype=torch.bfloat16
+                ):
+                    self.video_predictor.add_new_points_or_box(
+                        inference_state=inference_state,
+                        frame_idx=0,
+                        obj_id=figure.id,
+                        points=positive_clicks + negative_clicks,
+                        labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
+                        box=bbox,
+                    )
 
             api.logger.debug("Tracking...")
             # run propagation throughout the video
-            for (
-                out_frame_idx,
-                out_obj_ids,
-                out_mask_logits,
-            ) in video_predictor.propagate_in_video(inference_state):
-                if global_stop_indicatior:
-                    return
-                if inference_request["cancel_inference"]:
-                    logger.info(
-                        "Cancelling inference project...",
-                        extra={"inference_request_uuid": request_uuid},
-                    )
-                    global_stop_indicatior = True
-                    return
-                # skip first frame prediction
-                if out_frame_idx == 0:
-                    continue
-                cur_frame_index = frame_index + out_frame_idx * direction_n
-                for figure_id, masks in zip(out_obj_ids, out_mask_logits):
-                    masks = (masks > 0.0).cpu().numpy()
-                    for i, mask in enumerate(masks):
-                        sly_geometry = sly.Bitmap(mask, extra_validation=False)
-                        obj_id = figure_id_to_object_id[figure_id]
-                        upload_queue.put((sly_geometry, obj_id, cur_frame_index))
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                for (
+                    out_frame_idx,
+                    out_obj_ids,
+                    out_mask_logits,
+                ) in self.video_predictor.propagate_in_video(inference_state):
+                    if global_stop_indicatior:
+                        return
+                    if inference_request["cancel_inference"]:
+                        logger.info(
+                            "Cancelling inference project...",
+                            extra={"inference_request_uuid": request_uuid},
+                        )
+                        global_stop_indicatior = True
+                        return
+                    # skip first frame prediction
+                    if out_frame_idx == 0:
+                        continue
+                    cur_frame_index = frame_index + out_frame_idx * direction_n
+                    for figure_id, masks in zip(out_obj_ids, out_mask_logits):
+                        masks = (masks > 0.0).cpu().numpy()
+                        for i, mask in enumerate(masks):
+                            sly_geometry = sly.Bitmap(mask, extra_validation=False)
+                            obj_id = figure_id_to_object_id[figure_id]
+                            upload_queue.put((sly_geometry, obj_id, cur_frame_index))
 
         except Exception as e:
             if direct_progress:
@@ -1207,9 +1264,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         else:
             error = False
         finally:
-            if video_predictor is not None and inference_state is not None:
+            if self.video_predictor is not None and inference_state is not None:
                 # reset predictor state
-                video_predictor.reset_state(inference_state)
+                self.video_predictor.reset_state(inference_state)
             remove_dir(temp_frames_dir)
             stop_upload_event.set()
             if upload_thread.is_alive():
@@ -1245,7 +1302,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 settings = self._get_inference_settings(state)
                 smtool_state = request.state.context
                 api = request.state.api
-                crop = smtool_state["crop"]
+                crop = smtool_state.get("crop")
                 positive_clicks, negative_clicks = (
                     smtool_state["positive"],
                     smtool_state["negative"],
@@ -1271,16 +1328,17 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             uncropped_clicks += [
                 {**click, "is_positive": False} for click in negative_clicks
             ]
-            clicks = functional.transform_clicks_to_crop(crop, uncropped_clicks)
-            is_in_bbox = functional.validate_click_bounds(crop, clicks)
-            if not is_in_bbox:
-                logger.warn(f"Invalid value: click is out of bbox bounds.")
-                return {
-                    "origin": None,
-                    "bitmap": None,
-                    "success": True,
-                    "error": None,
-                }
+            if crop:
+                clicks = functional.transform_clicks_to_crop(crop, uncropped_clicks)
+                is_in_bbox = functional.validate_click_bounds(crop, clicks)
+                if not is_in_bbox:
+                    logger.warn(f"Invalid value: click is out of bbox bounds.")
+                    return {
+                        "origin": None,
+                        "bitmap": None,
+                        "success": True,
+                        "error": None,
+                    }
 
             # download image if needed (using cache)
             app_dir = get_data_dir()
@@ -1336,7 +1394,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             try:
                 # predict
                 logger.debug("Preparing settings for inference request...")
-                if self.use_bbox.is_switched():
+                if self.use_bbox.is_switched() and crop:
                     settings["mode"] = "combined"
                 else:
                     settings["mode"] = "points"
@@ -1346,13 +1404,14 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     settings["input_image_id"] = hash_str
                 elif "image_hash" in smtool_state:
                     settings["input_image_id"] = smtool_state["image_hash"]
-                settings["bbox_coordinates"] = [
-                    crop[0]["y"],
-                    crop[0]["x"],
-                    crop[1]["y"],
-                    crop[1]["x"],
-                ]
-                settings["bbox_class_name"] = "target"
+                if crop:
+                    settings["bbox_coordinates"] = [
+                        crop[0]["y"],
+                        crop[0]["x"],
+                        crop[1]["y"],
+                        crop[1]["x"],
+                    ]
+                    settings["bbox_class_name"] = "target"
                 point_coordinates, point_labels = [], []
                 for click in uncropped_clicks:
                     point_coordinates.append([click["x"], click["y"]])
@@ -1371,15 +1430,21 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 silent_remove(image_path)
 
             if pred_mask.any():
-                t, l, b, r = settings["bbox_coordinates"]
-                t = max(0, t)
-                l = max(0, l)
-                b = min(pred_mask.shape[0], b)
-                r = min(pred_mask.shape[1], r)
-                bitmap_data = pred_mask[t:b, l:r]
-                bitmap = sly.Bitmap(
-                    bitmap_data, origin=sly.PointLocation(t, l), extra_validation=False
-                )
+                if crop:
+                    t, l, b, r = settings["bbox_coordinates"]
+                    t = max(0, t)
+                    l = max(0, l)
+                    b = min(pred_mask.shape[0], b)
+                    r = min(pred_mask.shape[1], r)
+                    bitmap_data = pred_mask[t:b, l:r]
+                    bitmap = sly.Bitmap(
+                        bitmap_data,
+                        origin=sly.PointLocation(t, l),
+                        extra_validation=False,
+                    )
+                else:
+                    bitmap_data = pred_mask
+                    bitmap = sly.Bitmap(bitmap_data)
                 logger.debug(f"smart_segmentation inference done!")
                 response = {
                     "origin": {"x": bitmap.origin.col, "y": bitmap.origin.row},
@@ -1599,15 +1664,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         def track(request: Request):
             self._track(request.state.api, request.state.context)
 
-
-# if is_debug_with_sly_net():
-#     team_id = sly.env.team_id()
-#     original_dir = os.getcwd()
-#     sly_app_development.supervisely_vpn_network(action="up")
-#     task = sly_app_development.create_debug_task(
-#         team_id, port="8000", update_status=True
-#     )
-#     os.chdir(original_dir)
 
 m = SegmentAnything2(
     use_gui=True,
