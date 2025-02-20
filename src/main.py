@@ -512,8 +512,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.previous_image_id = settings["input_image_id"]
             mask = masks[0]
             predictions.append(sly.nn.PredictionMask(class_name=class_name, mask=mask))
-
-        torch.cuda.empty_cache()
         return predictions
 
     def get_bitmap_center(self, bitmap):
@@ -640,7 +638,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
             inference_state = self.video_predictor.init_state(
-                video_path=temp_frames_dir
+                video_path=temp_frames_dir,
+                offload_video_to_cpu=True,
+                offload_state_to_cpu=True,
+                async_loading_frames=True,
             )
 
         for i, input_geom_data in enumerate(input_geometries):
@@ -698,7 +699,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         {"type": geometry.geometry_name(), "data": geometry.to_json()}
                     )
 
-        torch.cuda.empty_cache()
+        self.video_predictor.reset_state(inference_state)
         return results
 
     def _track(
@@ -816,7 +817,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 )
             with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
                 inference_state = self.video_predictor.init_state(
-                    video_path=temp_frames_dir
+                    video_path=temp_frames_dir,
+                    offload_video_to_cpu=True,
+                    offload_state_to_cpu=True,
+                    async_loading_frames=True,
                 )
 
             for figure in figures:
@@ -966,7 +970,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if self.video_predictor is not None and inference_state is not None:
                 # reset predictor state
                 self.video_predictor.reset_state(inference_state)
-                torch.cuda.empty_cache()
             if upload_thread is not None and upload_thread.is_alive():
                 upload_stop.set()
                 upload_thread.join()
@@ -1187,7 +1190,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
             with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
                 inference_state = self.video_predictor.init_state(
-                    video_path=temp_frames_dir
+                    video_path=temp_frames_dir,
+                    offload_video_to_cpu=True,
+                    offload_state_to_cpu=True,
+                    async_loading_frames=True,
                 )
 
             for figure in figures:
