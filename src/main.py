@@ -512,6 +512,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.previous_image_id = settings["input_image_id"]
             mask = masks[0]
             predictions.append(sly.nn.PredictionMask(class_name=class_name, mask=mask))
+
+        torch.cuda.empty_cache()
         return predictions
 
     def get_bitmap_center(self, bitmap):
@@ -695,6 +697,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     results[-1].append(
                         {"type": geometry.geometry_name(), "data": geometry.to_json()}
                     )
+
+        torch.cuda.empty_cache()
         return results
 
     def _track(
@@ -962,6 +966,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if self.video_predictor is not None and inference_state is not None:
                 # reset predictor state
                 self.video_predictor.reset_state(inference_state)
+                torch.cuda.empty_cache()
             if upload_thread is not None and upload_thread.is_alive():
                 upload_stop.set()
                 upload_thread.join()

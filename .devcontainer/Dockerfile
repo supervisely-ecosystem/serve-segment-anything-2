@@ -21,7 +21,7 @@ RUN apt-get update
 RUN apt-get install ffmpeg libgeos-dev libsm6 libxext6 libexiv2-dev libxrender-dev libboost-all-dev -y
 RUN pip install opencv-python
 
-RUN pip3 install mock==5.1.0
+RUN pip3 install mock==4.0.2
 RUN pip3 install segmentation-models-pytorch==0.3.4
 
 RUN apt-get -y install curl
