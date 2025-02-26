@@ -445,21 +445,25 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         max_score_ind = np.argmax(scores)
                         masks = [masks[max_score_ind]]
             elif init_mask is not None:
-                # transform
-                mask_input = self.predictor.transform.apply_image(init_mask)
-                # pad
-                h, w = mask_input.shape[:2]
-                padh = self.predictor.model.image_encoder.img_size - h
-                padw = self.predictor.model.image_encoder.img_size - w
-                mask_input = np.pad(mask_input, ((0, padh), (0, padw)))
-                # downscale to 256x256
-                mask_input = cv2.resize(
-                    mask_input, (256, 256), interpolation=cv2.INTER_LINEAR
-                )
-                # put values
-                mask_input = mask_input.astype(float)
-                mask_input[mask_input > 0] = 20
-                mask_input[mask_input <= 0] = -20
+
+                mask_input = torch.tensor(init_mask).float()
+
+                # Use -10/+10 as logits for neg/pos pixels (very close to 0/1 in prob after sigmoid).
+                out_scale, out_bias = 10.0, -10.0  # sigmoid(-10.0)=4.5398e-05
+                high_res_masks = mask_input * out_scale + out_bias
+                mask_input = torch.nn.functional.interpolate(
+                    high_res_masks.expand(
+                        (1, 1, *high_res_masks.shape)
+                    ),  # Change from HxW to BxCxHxW
+                    size=(
+                        self.predictor.model.image_size // 4,
+                        self.predictor.model.image_size // 4,
+                    ),
+                    align_corners=False,
+                    mode="bilinear",
+                    antialias=True,  # use antialias for downsampling
+                ).squeeze((0))
+
                 with torch.inference_mode(), torch.autocast(
                     "cuda", dtype=torch.bfloat16
                 ):
@@ -506,7 +510,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 image_id = settings["input_image_id"]
                 cached_data = self.model_cache.get(image_id)
                 cached_data["previous_bbox"] = bbox_coordinates
-                cached_data["mask_input"] = logits[0]
+                if len(point_labels) > 1:
+                    cached_data["mask_input"] = logits[0]
+                else:
+                    cached_data["mask_input"] = logits[max_score_ind]
                 self.model_cache.set(image_id, cached_data)
             # update previous_image_id variable
             self.previous_image_id = settings["input_image_id"]
