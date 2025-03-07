@@ -43,6 +43,8 @@ min_mask_region_area: 0
 # form masks are returned in, can be 'binary_mask', 'uncompressed_rle', or 'coco_rle'
 # (only for raw mode)
 output_mode: binary_mask
+# whether to add a one step refinement using previous mask predictions
+use_m2m: false
 # name of bounding box (only for bbox and combined mode)
 bbox_class_name: None
 # name of mask class (only for points mode)

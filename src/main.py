@@ -294,6 +294,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 ],
                 min_mask_region_area=settings["min_mask_region_area"],
                 output_mode=settings["output_mode"],
+                use_m2m=settings["use_m2m"],
             )
             with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
                 masks = mask_generator.generate(input_image)
