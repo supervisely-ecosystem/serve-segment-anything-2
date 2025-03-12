@@ -55,6 +55,11 @@ def notqdm(iterable, *args, **kwargs):
 
 
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.previous_plane = None
+        self.current_plane = None
+
     def add_content_to_custom_tab(self, gui):
         self.select_config = SelectString(
             values=[
@@ -222,8 +227,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         return self._model_meta
 
     def set_image_data(self, input_image, settings):
-        if settings["input_image_id"] != self.previous_image_id:
-            if settings["input_image_id"] not in self.model_cache:
+        if settings["input_image_id"] != self.previous_image_id or self.current_plane != self.previous_plane:
+            if settings["input_image_id"] not in self.model_cache or self.current_plane != self.previous_plane:
                 with torch.inference_mode(), torch.autocast(
                     "cuda", dtype=torch.bfloat16
                 ):
@@ -243,6 +248,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         "original_size": self.predictor._orig_hw,
                     },
                 )
+                self.previous_plane = self.current_plane
             else:
                 cached_data = self.model_cache.get(settings["input_image_id"])
                 cached_data["features"]["image_embed"] = cached_data["features"][
@@ -1366,6 +1372,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if hash_str not in self._inference_image_cache:
                 logger.debug(f"downloading image: {hash_str}")
                 try:
+                    self.current_plane = smtool_state.get("volume", {}).get("normal", None)
                     image_np = functional.download_image_from_context(
                         smtool_state,
                         api,
@@ -1383,7 +1390,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 image_np = self._inference_image_cache.get(hash_str)
 
             # crop
-            image_path = os.path.join(app_dir, f"{time.time()}_{rand_str(10)}.jpg")
+            image_path = os.path.join(app_dir, f'{str(time.time()).replace(".", "_")}_{rand_str(10)}.jpg')
             if isinstance(image_np, list):
                 image_np = image_np[0]
             sly_image.write(image_path, image_np)
