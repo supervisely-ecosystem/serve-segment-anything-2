@@ -26,6 +26,8 @@ RUN pip3 install segmentation-models-pytorch==0.3.4
 
 RUN apt-get -y install curl
 
+RUN mkdir -p /workspaces/serve-segment-anything-2/sam2.1_weights
+
 RUN apt -y install wireguard iproute2
 RUN apt-get -y install wget
 RUN apt-get install nano

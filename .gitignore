@@ -1,6 +1,5 @@
 sam2.1_weights/
 supervisely.env
-debug.env
 **/__pycache__/
 prompts/
 frames/

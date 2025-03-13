@@ -11,6 +11,11 @@
             ]
         }
     },
+    "mounts": [
+        "source=${localEnv:HOME}/supervisely.env,target=/workspaces/serve-segment-anything-2/supervisely.env,type=bind,consistency=cached",
+        "source=${localEnv:HOME}/sam2_weights,target=/workspaces/serve-segment-anything-2/sam2.1_weights,type=bind,consistency=cached"
+    ],
+    "initializeCommand": "chmod +x ${localWorkspaceFolder}/.devcontainer/download_weights.sh && ${localWorkspaceFolder}/.devcontainer/download_weights.sh",
     "runArgs": [
         "--gpus",
         "all",
