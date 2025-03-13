@@ -1272,9 +1272,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     for figure_id, masks in zip(out_obj_ids, out_mask_logits):
                         masks = (masks > 0.0).cpu().numpy()
                         for i, mask in enumerate(masks):
-                            sly_geometry = sly.Bitmap(mask, extra_validation=False)
-                            obj_id = figure_id_to_object_id[figure_id]
-                            upload_queue.put((sly_geometry, obj_id, cur_frame_index))
+                            if np.any(mask):
+                                sly_geometry = sly.Bitmap(mask, extra_validation=False)
+                                obj_id = figure_id_to_object_id[figure_id]
+                                upload_queue.put((sly_geometry, obj_id, cur_frame_index))
 
         except Exception as e:
             if direct_progress:
