@@ -34,7 +34,7 @@ from supervisely.nn.inference.inference import (
     _convert_sly_progress_to_dict,
     _get_log_extra_for_inference_request,
 )
-
+from supervisely.volume_annotation.volume_annotation import Plane
 
 load_dotenv("supervisely.env")
 load_dotenv("debug.env")
@@ -53,15 +53,21 @@ def notqdm(iterable, *args, **kwargs):
     """
     return iterable
 
-
+def get_plane_name(normal):
+    if normal == {"x":1, "y":0, "z":0}:
+        return Plane.SAGITTAL
+    elif normal == {"x":0, "y":1, "z":0}:
+        return Plane.CORONAL
+    elif normal == {"x":0, "y":0, "z":1}:
+        return Plane.AXIAL
+    else:
+        return "Unknown"
+    
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # To process volume slices correctly with embeddings logic
-        self.previous_plane = None
-        self.current_plane = None
-        self.slice_idx = None
-        self.previous_slice_idx = None
+        self.process_volume = None
 
     def add_content_to_custom_tab(self, gui):
         self.select_config = SelectString(
@@ -230,8 +236,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         return self._model_meta
 
     def set_image_data(self, input_image, settings):
-        if settings["input_image_id"] != self.previous_image_id or self.current_plane != self.previous_plane or self.previous_slice_idx != self.slice_idx:
-            if settings["input_image_id"] not in self.model_cache or self.current_plane != self.previous_plane or self.previous_slice_idx != self.slice_idx:
+        if settings["input_image_id"] != self.previous_image_id:
+            if settings["input_image_id"] not in self.model_cache:
                 with torch.inference_mode(), torch.autocast(
                     "cuda", dtype=torch.bfloat16
                 ):
@@ -251,8 +257,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         "original_size": self.predictor._orig_hw,
                     },
                 )
-                self.previous_plane = self.current_plane
-                self.previous_slice_idx = self.slice_idx
             else:
                 cached_data = self.model_cache.get(settings["input_image_id"])
                 cached_data["features"]["image_embed"] = cached_data["features"][
@@ -1345,6 +1349,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 state = request.state.state
                 settings = self._get_inference_settings(state)
                 smtool_state = request.state.context
+                self.process_volume = smtool_state.get("volume") is not None
                 api = request.state.api
                 crop = smtool_state.get("crop")
                 positive_clicks, negative_clicks = (
@@ -1391,8 +1396,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if hash_str not in self._inference_image_cache:
                 logger.debug(f"downloading image: {hash_str}")
                 try:
-                    self.current_plane = smtool_state.get("volume", {}).get("normal", None)
-                    self.slice_idx = smtool_state.get("volume", {}).get("slice_index", None)
                     image_np = functional.download_image_from_context(
                         smtool_state,
                         api,
@@ -1444,12 +1447,18 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     settings["mode"] = "combined"
                 else:
                     settings["mode"] = "points"
-                if "image_id" in smtool_state:
-                    settings["input_image_id"] = smtool_state["image_id"]
-                elif "video" in smtool_state:
-                    settings["input_image_id"] = hash_str
-                elif "image_hash" in smtool_state:
-                    settings["input_image_id"] = smtool_state["image_hash"]
+                if self.process_volume:
+                    volume_id = smtool_state.get("volume").get("volume_id")
+                    volume_plane = get_plane_name(smtool_state.get("volume").get("normal"))
+                    slice_idx = smtool_state.get("volume").get("slice_index")
+                    settings["input_image_id"] = f"{volume_id}_{volume_plane}_{slice_idx}"
+                else:
+                    if "image_id" in smtool_state:
+                        settings["input_image_id"] = smtool_state["image_id"]
+                    elif "video" in smtool_state:
+                        settings["input_image_id"] = hash_str
+                    elif "image_hash" in smtool_state:
+                        settings["input_image_id"] = smtool_state["image_hash"]
                 if crop:
                     settings["bbox_coordinates"] = [
                         crop[0]["y"],
