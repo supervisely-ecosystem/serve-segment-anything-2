@@ -15,7 +15,7 @@ RUN SAM2_BUILD_ALLOW_ERRORS=0 pip3 install -v -e ".[demo]"
 RUN python3 setup.py clean --all
 RUN python3 setup.py build_ext --inplace
 
-RUN python3 -m pip install supervisely==6.73.286
+RUN python3 -m pip install supervisely==6.73.330
 
 RUN apt-get update
 RUN apt-get install ffmpeg libgeos-dev libsm6 libxext6 libexiv2-dev libxrender-dev libboost-all-dev -y
@@ -25,6 +25,8 @@ RUN pip3 install mock==4.0.2
 RUN pip3 install segmentation-models-pytorch==0.3.4
 
 RUN apt-get -y install curl
+
+RUN mkdir -p /workspaces/serve-segment-anything-2/sam2.1_weights
 
 RUN apt -y install wireguard iproute2
 RUN apt-get -y install wget
