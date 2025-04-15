@@ -1228,7 +1228,7 @@ def preview_prompt():
     )
     # generate prompts
     n_points = random.randint(min_points, max_points)
-    prompts = generate_artificial_prompts(multilabel_mask, preview_image_np, n_points)
+    prompts = generate_artificial_prompts(ann, n_points)
     bitmap = multilabel_mask.copy()
     bitmap = np.where(bitmap != 0, 255, 0).astype(np.uint8)
     bitmap = np.repeat(bitmap[..., np.newaxis], 3, axis=2)
@@ -1388,10 +1388,6 @@ def start_training():
         use_cache=use_cache,
         progress=progress_bar_download_project,
     )
-    # remove unlabeled images
-    n_images = sum([info.images_count for info in dataset_infos])
-    n_images_before = n_images
-    sly.Project.remove_items_without_objects(g.project_dir, inplace=True)
     # remove unselected classes
     selected_classes = classes_table.get_selected_classes()
     try:
@@ -1415,6 +1411,10 @@ def start_training():
         sly.Project.remove_classes_except(
             g.project_dir, classes_to_keep=selected_classes, inplace=True
         )
+    # remove unlabeled images
+    n_images = sum([info.images_count for info in dataset_infos])
+    n_images_before = n_images
+    sly.Project.remove_items_without_objects(g.project_dir, inplace=True)
     # validate splits
     project = sly.Project(g.project_dir, sly.OpenMode.READ)
     n_images_after = project.total_items
@@ -1636,10 +1636,14 @@ def start_training():
                     if g.stop_training:
                         break
                     n_points = random.randint(min_points, max_points)
-                    images, masks = batch
+                    images, masks, ann_paths = batch
+                    anns = [
+                        sly.Annotation.load_json_file(ann_path, project_meta)
+                        for ann_path in ann_paths
+                    ]
                     # generate prompts for given batch
                     batch_images, batch_masks, batch_points, batch_labels = (
-                        generate_prompts_for_batch(masks, images, n_points)
+                        generate_prompts_for_batch(masks, images, n_points, anns)
                     )
 
                     with torch.cuda.amp.autocast():
@@ -1760,9 +1764,13 @@ def start_training():
                         if g.stop_training:
                             break
                         n_points = random.randint(min_points, max_points)
-                        images, masks = batch
+                        images, masks, ann_paths = batch
+                        anns = [
+                            sly.Annotation.load_json_file(ann_path, project_meta)
+                            for ann_path in ann_paths
+                        ]
                         batch_images, batch_masks, batch_points, batch_labels = (
-                            generate_prompts_for_batch(masks, images, n_points)
+                            generate_prompts_for_batch(masks, images, n_points, anns)
                         )
 
                         with torch.no_grad():

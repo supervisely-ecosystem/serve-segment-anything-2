@@ -19,4 +19,4 @@ class SAM2Dataset(Dataset):
         ann = sly.Annotation.load_json_file(ann_path, self.sly_project_meta)
         mask = get_multilabel_mask(img_np, ann)
         img_np, mask = resize_image_and_mask(img_np, mask)
-        return img_np, mask
+        return img_np, mask, ann_path
