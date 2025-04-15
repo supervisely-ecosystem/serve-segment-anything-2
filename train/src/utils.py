@@ -50,25 +50,41 @@ def resize_image_and_mask(image, mask, size=1024, scale_proportionally=False):
 
 
 def generate_artificial_prompts(
-    multilabel_mask,
-    image_np,
+    ann,
     n_points,
     use_bbox=False,
 ):
-    labels = np.unique(multilabel_mask)[1:]  # skip background label
+    labels = ann.labels
     prompts = {"point_coordinates": [], "point_labels": []}
     if use_bbox:
         prompts["bboxes"] = []
 
-    for label in labels:
+    for i, label in enumerate(labels):
+        bitmap = np.zeros((ann.img_size[0], ann.img_size[1], 3), dtype=np.uint8)
+        geometry = label.geometry
+        geometry.draw(bitmap=bitmap, color=[i + 1, i + 1, i + 1])
+        bitmap = bitmap[:, :, 0]
         # generate point prompts
-        mask = (multilabel_mask == label).astype(np.uint8)
+        mask = (bitmap == i + 1).astype(np.uint8)
+        # resize mask
+        mask = torch.from_numpy(mask)
+        mask = mask.view(1, 1, mask.shape[0], mask.shape[1])
+        mask = torch.nn.functional.interpolate(mask, (1024, 1024), mode="nearest")
+        mask = mask.squeeze().numpy()
         row_indexes, col_indexes = np.where(mask)
         point_coordinates = []
         for i in range(n_points):
-            idx = np.random.randint(0, len(row_indexes))
-            row_index, col_index = row_indexes[idx], col_indexes[idx]
-            point_coordinates.append([col_index, row_index])
+            if len(row_indexes) >= 1:
+                idx = np.random.randint(0, len(row_indexes))
+                row_index, col_index = row_indexes[idx], col_indexes[idx]
+                point_coordinates.append([col_index, row_index])
+            else:
+                point_coordinates.append(
+                    [
+                        np.random.randint(0, 1024 - 1),
+                        np.random.randint(0, 1024 - 1),
+                    ]
+                )
         prompts["point_coordinates"].extend(point_coordinates)
         prompts["point_labels"].extend(np.ones((n_points,)))
         if use_bbox:
@@ -86,7 +102,7 @@ def generate_artificial_prompts(
             padded_right = right + padding
             padded_bottom = bottom + padding
             # check if padded bbox is not out of image bounds
-            image_h, image_w = image_np.shape[0], image_np.shape[1]
+            image_h, image_w = 1024, 1024
             padded_left = max(1, padded_left)
             padded_top = max(1, padded_top)
             padded_right = min(image_w - 1, padded_right)
@@ -102,20 +118,19 @@ def generate_artificial_prompts(
     return prompts
 
 
-def generate_prompts_for_batch(masks, images, n_points):
+def generate_prompts_for_batch(masks, images, n_points, anns):
     (
         batch_images,
         batch_masks,
         batch_points,
         batch_labels,
     ) = ([], [], [], [])
-    for image, mask in zip(images, masks):
+    for image, mask, ann in zip(images, masks, anns):
         image = image.numpy()
         mask = mask.numpy()
         batch_images.append(image)
         image_prompts = generate_artificial_prompts(
-            mask,
-            image,
+            ann,
             n_points,
         )
         batch_points.append(image_prompts["point_coordinates"])
@@ -167,11 +182,9 @@ def generate_predictions(
             gt_img = Image.fromarray(gt_img)
             gt_img_path = os.path.join(save_dir, f"gt_{i}.jpg")
             gt_img.save(gt_img_path)
-            # get multilabel mask
-            multilabel_mask = get_multilabel_mask(img, gt_ann)
             # generate prompt
             n_points = random.randint(min_points, max_points)
-            prompt = generate_artificial_prompts(multilabel_mask, img, n_points)
+            prompt = generate_artificial_prompts(gt_ann, n_points)
             # apply model to image
             point_coordinates = np.array(prompt["point_coordinates"])
             point_labels = np.array(prompt["point_labels"])

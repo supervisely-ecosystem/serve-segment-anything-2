@@ -8,3 +8,4 @@ app_data/
 train/tempfiles/
 tests/
 test_results/
+debug.env
