@@ -1111,8 +1111,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                                     ApiField.PAYLOAD: payload,
                                 }
                                 stream_queue.put(data)
-                                
-                    
                     else:
                         if stop_event.is_set():
                             api.logger.debug(
@@ -1359,7 +1357,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 if item is None:
                     break
                 logger.debug("streaming item: %s", item)
-                yield f"data: {item}\n\n"
+                yield f"data: {json.dumps(item)}\n\n"
 
         return StreamingResponse(
             event_generator(),
