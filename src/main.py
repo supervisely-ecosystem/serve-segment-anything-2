@@ -1758,7 +1758,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         def track_stream(request: Request):
             query_params = dict(request.query_params)
             logger.debug("track_stream request with query parameters:", extra=query_params)
-            context = json.loads(query_params["data"])
+            context = json.loads(query_params["data"])["context"]
             session_id = context["session_id"]
             inference_request_uuid = uuid.uuid5(
                 namespace=uuid.NAMESPACE_URL, name=f"{time.time()}"
