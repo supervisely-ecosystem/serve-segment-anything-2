@@ -1107,7 +1107,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                                 }
                                 data = {
                                     ApiField.SESSION_ID: session_id,
-                                    ApiField.ACTION: str(VideoAnnotationToolAction.DIRECT_TRACKING_PROGRESS),
+                                    ApiField.ACTION: "progress",
                                     ApiField.PAYLOAD: payload,
                                 }
                                 stream_queue.put(data)
@@ -1319,7 +1319,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 }
                 data = {
                     ApiField.SESSION_ID: session_id,
-                    ApiField.ACTION: str(VideoAnnotationToolAction.DIRECT_TRACKING_PROGRESS),
+                    ApiField.ACTION: "progress",
                     ApiField.PAYLOAD: payload,
                 }
                 stream_queue.put(data)
@@ -1763,7 +1763,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             inference_request_uuid = uuid.uuid5(
                 namespace=uuid.NAMESPACE_URL, name=f"{time.time()}"
             ).hex
-            context["streaming_request"] = True
+            context["streamingRequest"] = True
             response = self._setup_stream(session_id)
             self._on_inference_start(inference_request_uuid)
             self._inference_requests[inference_request_uuid]["lock"] = threading.Lock()
@@ -1779,7 +1779,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 self._on_inference_end, inference_request_uuid=inference_request_uuid
             )
             future.add_done_callback(end_callback)
-            self.session_stream_queue[session_id].put({"inference_request_uuid": inference_request_uuid})
+            self.session_stream_queue[session_id].put({"sessionId": session_id, "action": "inference-started", "payload": {"inference_request_uuid": inference_request_uuid}})
             return response
 
 
