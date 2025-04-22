@@ -1166,14 +1166,36 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if cnt == 0:
                 return
             progress.iters_done_report(cnt)
-            api.vid_ann_tool.set_direct_tracking_progress(
-                session_id,
-                video_id,
-                track_id,
-                frame_range=range_of_frames,
-                progress_current=progress.current,
-                progress_total=progress.total,
-            )
+            if direct_progress:
+                api.vid_ann_tool.set_direct_tracking_progress(
+                    session_id,
+                    video_id,
+                    track_id,
+                    frame_range=range_of_frames,
+                    progress_current=progress.current,
+                    progress_total=progress.total,
+                )
+            elif streaming_request:
+                stream_queue = self.session_stream_queue.get(session_id, None)
+                if stream_queue is None:
+                    raise RuntimeError(
+                        f"Unable to find stream queue for session {session_id}"
+                    )
+                payload = {
+                    ApiField.TRACK_ID: track_id,
+                    ApiField.VIDEO_ID: video_id,
+                    ApiField.FRAME_RANGE: range_of_frames,
+                    ApiField.PROGRESS: {
+                        ApiField.CURRENT: progress.current,
+                        ApiField.TOTAL: progress.total,
+                    },
+                }
+                data = {
+                    ApiField.SESSION_ID: session_id,
+                    ApiField.ACTION: "progress",
+                    ApiField.PAYLOAD: payload,
+                }
+                stream_queue.put(data)
 
         upload_queue = Queue()
         notify_queue = Queue()
