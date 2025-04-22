@@ -1357,6 +1357,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 item = q.get()
                 if item is None:
                     break
+                logger.debug("streaming item: %s", item)
                 yield f"data: {item}\n\n"
 
         return StreamingResponse(
@@ -1752,29 +1753,32 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         def track(request: Request):
             self._track(request.state.api, request.state.context)
 
-        @server.post("/track_stream")
-        def track_stream(request: Request):
-            session_id = request.state.context["session_id"]
+        @server.get("/track_stream")
+        def track_stream(request: Request, query: dict):
+            logger.debug("track_stream request with query:", extra=query)
+            context = query
+            session_id = context["session_id"]
             inference_request_uuid = uuid.uuid5(
                 namespace=uuid.NAMESPACE_URL, name=f"{time.time()}"
             ).hex
-            context = request.state.context
             context["streaming_request"] = True
+            response = self._setup_stream(session_id)
             self._on_inference_start(inference_request_uuid)
             self._inference_requests[inference_request_uuid]["lock"] = threading.Lock()
             future = self._executor.submit(
                 self._handle_error_in_async,
                 inference_request_uuid,
                 self._track_async,
-                request.state.api,
-                request.state.context,
+                self.api,
+                context,
                 inference_request_uuid,
             )
             end_callback = functools.partial(
                 self._on_inference_end, inference_request_uuid=inference_request_uuid
             )
             future.add_done_callback(end_callback)
-            return self._setup_stream(session_id)
+            self.session_stream_queue[session_id].put({"inference_request_uuid": inference_request_uuid})
+            return response
 
 
 m = SegmentAnything2(
