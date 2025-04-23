@@ -1119,7 +1119,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                             if streaming_request:
                                 stream_queue = self.session_stream_queue.get(track_id, None)
                                 if stream_queue is not None:
-                                    stream_queue.pun(None)
+                                    stream_queue.put(None)
                             return
                     time.sleep(1)
             except Exception as e:
@@ -1180,10 +1180,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     progress_total=progress.total,
                 )
             elif streaming_request:
-                stream_queue = self.session_stream_queue.get(session_id, None)
+                stream_queue = self.session_stream_queue.get(track_id, None)
                 if stream_queue is None:
                     raise RuntimeError(
-                        f"Unable to find stream queue for session {session_id}"
+                        f"Unable to find stream queue for session {track_id}"
                     )
                 payload = {
                     ApiField.TRACK_ID: track_id,
