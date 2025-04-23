@@ -1220,6 +1220,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         inference_state = None
         api.logger.info("Start tracking.")
+        error = False
         try:
             temp_frames_dir = f"frames/{rand_str(10)}"
             # save frames to directory
