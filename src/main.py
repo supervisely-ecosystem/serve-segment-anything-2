@@ -1330,25 +1330,28 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     message=f"An error occured during tracking. Error: {e}",
                 )
             elif streaming_request:
-                stream_queue = self.session_stream_queue.get(session_id, None)
-                if stream_queue is None:
-                    raise RuntimeError(
-                        f"Unable to find stream queue for session {session_id}"
-                    )
-                payload = {
-                    ApiField.TRACK_ID: track_id,
-                    ApiField.VIDEO_ID: video_id,
-                    ApiField.TYPE: "error",
-                    ApiField.ERROR: {ApiField.MESSAGE: f"An error occured during tracking. Error: {e}"},
-                }
-                data = {
-                    ApiField.SESSION_ID: session_id,
-                    ApiField.ACTION: "progress",
-                    ApiField.PAYLOAD: payload,
-                }
-                stream_queue.put(data)
+                try:
+                    stream_queue = self.session_stream_queue.get(track_id, None)
+                    if stream_queue is None:
+                        raise RuntimeError(
+                            f"Unable to find stream queue for session {track_id}"
+                        )
+                    payload = {
+                        ApiField.TRACK_ID: track_id,
+                        ApiField.VIDEO_ID: video_id,
+                        ApiField.TYPE: "error",
+                        ApiField.ERROR: {ApiField.MESSAGE: f"An error occured during tracking. Error: {e}"},
+                    }
+                    data = {
+                        ApiField.SESSION_ID: session_id,
+                        ApiField.ACTION: "progress",
+                        ApiField.PAYLOAD: payload,
+                    }
+                    stream_queue.put(data)
+                except Exception as notify_e:
+                    logger.error("Unable to notify about error: %s", str(notify_e), exc_info=True)
             error = True
-            raise
+            raise e
         else:
             error = False
         finally:
