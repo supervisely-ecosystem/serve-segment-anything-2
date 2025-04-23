@@ -1322,6 +1322,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                             upload_queue.put((sly_geometry, obj_id, cur_frame_index))
 
         except Exception as e:
+            error = True
             if direct_progress:
                 api.vid_ann_tool.set_direct_tracking_error(
                     session_id,
@@ -1350,7 +1351,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     stream_queue.put(data)
                 except Exception as notify_e:
                     logger.error("Unable to notify about error: %s", str(notify_e), exc_info=True)
-            error = True
             raise e
         else:
             error = False
