@@ -994,7 +994,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     def _track_async(self, api: sly.Api, context: dict, request_uuid: str = None):
         self.set_cuda_properties()
         inference_request = self._inference_requests[request_uuid]
-        session_id = context.get("session_id", context["sessionId"])
+        session_id = context.get("session_id", context.get("sessionId"))
         direct_progress = context.get("useDirectProgressMessages", False)
         streaming_request = context.get("streamingRequest", False)
         frame_index = context["frameIndex"]
@@ -1091,10 +1091,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                                     progress_total=progress.total,
                                 )
                             elif streaming_request:
-                                stream_queue = self.session_stream_queue.get(session_id, None)
+                                stream_queue = self.session_stream_queue.get(track_id, None)
                                 if stream_queue is None:
                                     raise RuntimeError(
-                                        f"Unable to find stream queue for session {session_id}"
+                                        f"Unable to find stream queue for session {track_id}"
                                     )
                                 payload = {
                                     ApiField.TRACK_ID: track_id,
@@ -1116,6 +1116,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                             api.logger.debug(
                                 "stop event is set. returning from notify loop"
                             )
+                            if streaming_request:
+                                stream_queue = self.session_stream_queue.get(track_id, None)
+                                if stream_queue is not None:
+                                    stream_queue.pun(None)
                             return
                     time.sleep(1)
             except Exception as e:
@@ -1364,16 +1368,16 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             else:
                 progress.message = "Ready"
                 progress.set(current=0, total=1, report=True)
-    
-    def _setup_stream(self, session_id):
+
+    def _setup_stream(self, track_id):
         if not hasattr(self, "session_stream_queue"):
             self.session_stream_queue = {}
 
-        if session_id not in self.session_stream_queue:
-            self.session_stream_queue[session_id] = Queue()
+        if track_id not in self.session_stream_queue:
+            self.session_stream_queue[track_id] = Queue()
 
         def event_generator():
-            q = self.session_stream_queue[session_id]
+            q = self.session_stream_queue[track_id]
             while True:
                 item = q.get()
                 if item is None:
@@ -1778,12 +1782,12 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         def track_stream(request: Request):
             context = request.state.context
             logger.debug("track_stream request with context:", extra=context)
-            session_id = context["session_id"]
+            track_id = context["trackId"]
             inference_request_uuid = uuid.uuid5(
                 namespace=uuid.NAMESPACE_URL, name=f"{time.time()}"
             ).hex
             context["streamingRequest"] = True
-            response = self._setup_stream(session_id)
+            response = self._setup_stream(track_id)
             self._on_inference_start(inference_request_uuid)
             self._inference_requests[inference_request_uuid]["lock"] = threading.Lock()
             future = self._executor.submit(
@@ -1798,7 +1802,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 self._on_inference_end, inference_request_uuid=inference_request_uuid
             )
             future.add_done_callback(end_callback)
-            self.session_stream_queue[session_id].put({"sessionId": session_id, "action": "inference-started", "payload": {"inference_request_uuid": inference_request_uuid}})
+            self.session_stream_queue[track_id].put({"trackId": track_id, "action": "inference-started", "payload": {"inference_request_uuid": inference_request_uuid}})
             return response
 
 
