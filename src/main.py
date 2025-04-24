@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import json
 import os
@@ -37,7 +38,7 @@ from supervisely.nn.inference.inference import (
     _get_log_extra_for_inference_request,
 )
 from supervisely.api.video_annotation_tool_api import VideoAnnotationToolAction
-
+from supervisely.app.fastapi.utils import run_sync
 
 load_dotenv("supervisely.env")
 load_dotenv("debug.env")
@@ -1387,7 +1388,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         def event_generator():
             q: Queue = self.session_stream_queue[track_id]
             while True:
-                if request.is_disconnected():
+                if run_sync(request.is_disconnected()):
                     logger.debug("Client disconnected")
                     inference_request = self._inference_requests.get(inference_request_uuid, None)
                     if inference_request is not None:
