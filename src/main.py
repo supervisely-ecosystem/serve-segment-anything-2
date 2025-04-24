@@ -1065,6 +1065,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                             extra={"inference_request_uuid": request_uuid},
                         )
                         global_stop_indicatior = True
+                        if streaming_request:
+                            stream_queue = self.session_stream_queue.get(track_id, None)
+                            if stream_queue is not None:
+                                stream_queue.put(None)
                         return
                     items = []  # (geometry, object_id, frame_index)
                     while not q.empty():
@@ -1373,7 +1377,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 progress.message = "Ready"
                 progress.set(current=0, total=1, report=True)
 
-    def _setup_stream(self, track_id):
+    def _setup_stream(self, track_id, request: Request, inference_request_uuid: str):
         if not hasattr(self, "session_stream_queue"):
             self.session_stream_queue = {}
 
@@ -1381,8 +1385,14 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.session_stream_queue[track_id] = Queue()
 
         def event_generator():
-            q = self.session_stream_queue[track_id]
+            q: Queue = self.session_stream_queue[track_id]
             while True:
+                if request.is_disconnected():
+                    logger.debug("Client disconnected")
+                    inference_request = self._inference_requests.get(inference_request_uuid, None)
+                    if inference_request is not None:
+                        inference_request["cancel_inference"] = True
+                    break
                 item = q.get()
                 if item is None:
                     break
@@ -1676,7 +1686,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             frame_range = context.get("frame_range", None)
             if frame_range is None:
                 frame_range = context.get("frameRange", None)
-            sly.logger.debug("frame_range: %s", frame_range)
             with inference_request["lock"]:
                 inference_request_copy = inference_request.copy()
                 inference_request_copy.pop("lock")
@@ -1791,7 +1800,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 namespace=uuid.NAMESPACE_URL, name=f"{time.time()}"
             ).hex
             context["streamingRequest"] = True
-            response = self._setup_stream(track_id)
+            response = self._setup_stream(track_id, request, inference_request_uuid)
             self._on_inference_start(inference_request_uuid)
             self._inference_requests[inference_request_uuid]["lock"] = threading.Lock()
             future = self._executor.submit(
