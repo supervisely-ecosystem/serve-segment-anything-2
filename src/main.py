@@ -1388,7 +1388,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         def event_generator():
             q: Queue = self.session_stream_queue[track_id]
             while True:
-                if run_sync(request.is_disconnected()):
+                loop = asyncio.get_event_loop()
+                is_disconnected = loop.run_until_complete(request.is_disconnected())
+                if is_disconnected:
                     logger.debug("Client disconnected")
                     inference_request = self._inference_requests.get(inference_request_uuid, None)
                     if inference_request is not None:
