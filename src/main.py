@@ -6,7 +6,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from queue import Queue
+from queue import Queue, Empty
 from typing import Any, Dict, List, Literal
 import uuid
 
@@ -1386,34 +1386,26 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.session_stream_queue[track_id] = asyncio.Queue()
 
         async def event_generator():
-            q: asyncio.Queue = self.session_stream_queue[track_id]
+            q: Queue = self.session_stream_queue[track_id]
             while True:
-                get_task = asyncio.create_task(q.get())
-                disconnect_task = asyncio.create_task(request.is_disconnected())
-
-                done, pending = await asyncio.wait(
-                    [get_task, disconnect_task],
-                    return_when=asyncio.FIRST_COMPLETED
-                )
-
-                for task in pending:
-                    task.cancel()
-
-                if disconnect_task in done:
-                    is_disconnected = await disconnect_task
-                    if is_disconnected:
-                        logger.debug("Client disconnected")
-                        inference_request = self._inference_requests.get(inference_request_uuid, None)
-                        if inference_request is not None:
-                            inference_request["cancel_inference"] = True
-                        break
-
-                if get_task in done:
-                    item = await get_task
+                # Check for disconnection first
+                is_disconnected = await request.is_disconnected()
+                if is_disconnected:
+                    logger.debug("Client disconnected")
+                    inference_request = self._inference_requests.get(inference_request_uuid, None)
+                    if inference_request is not None:
+                        inference_request["cancel_inference"] = True
+                    break
+                
+                try:
+                    item = q.get(block=True, timeout=0.01)
                     if item is None:
                         break
                     logger.debug("streaming item: %s", item)
                     yield f"data: {json.dumps(item)}\n\n"
+                except Empty:
+                    await asyncio.sleep(0.01)
+                    continue
 
         return StreamingResponse(
             event_generator(),
