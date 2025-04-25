@@ -1386,25 +1386,74 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         if track_id not in self.session_stream_queue:
             self.session_stream_queue[track_id] = Queue()
 
-        async def event_generator():
-            q: Queue = self.session_stream_queue[track_id]
-            while True:
+        stream_active = True
+        
+        # Set up a background task to monitor disconnection
+        async def monitor_connection():
+            nonlocal stream_active
+            try:
                 is_disconnected = await request.is_disconnected()
                 if is_disconnected:
-                    logger.debug("Client disconnected")
+                    logger.debug("Client disconnected detected by monitor")
+                    stream_active = False
+                    # Cancel inference
                     inference_request = self._inference_requests.get(inference_request_uuid, None)
                     if inference_request is not None:
                         inference_request["cancel_inference"] = True
-                    break
-                try:
-                    item = q.get(block=True, timeout=0.01)
-                    if item is None:
-                        break
-                    logger.debug("streaming item: %s", item)
-                    yield f"data: {json.dumps(item)}\n\n"
-                except Empty:
-                    await asyncio.sleep(0.01)
-                    continue
+                    # Put a sentinel value to unblock the generator
+                    self.session_stream_queue[track_id].put(None)
+            except Exception as e:
+                logger.error(f"Error in connection monitor: {str(e)}")
+                stream_active = False
+        
+        # Start the monitoring task
+        disconnect_task = asyncio.create_task(monitor_connection())
+
+        async def event_generator():
+            q: Queue = self.session_stream_queue[track_id]
+            nonlocal stream_active
+            
+            try:
+                # As long as we think the stream is active
+                while stream_active:
+                    try:
+                        # Try to get an item with a timeout
+                        item = q.get(block=True, timeout=0.5)
+                        
+                        # Exit condition
+                        if item is None:
+                            logger.debug("Received None sentinel, exiting generator")
+                            break
+                            
+                        # Check if we're still active before yielding
+                        if not stream_active:
+                            logger.debug("Stream marked inactive, exiting generator")
+                            break
+                            
+                        logger.debug("streaming item: %s", item)
+                        yield f"data: {json.dumps(item)}\n\n"
+                        
+                    except Empty:
+                        # If queue is empty, check if we're still active
+                        if not stream_active:
+                            logger.debug("Stream marked inactive during wait, exiting generator")
+                            break
+                        await asyncio.sleep(0.1)
+                        continue
+                    
+            except Exception as e:
+                logger.error(f"Error in event generator: {str(e)}")
+                stream_active = False
+            finally:
+                logger.debug(f"Event generator for track {track_id} is ending")
+                # Make sure we cancel our background task
+                if not disconnect_task.done():
+                    disconnect_task.cancel()
+                
+                # Ensure inference is canceled
+                inference_request = self._inference_requests.get(inference_request_uuid, None)
+                if inference_request is not None:
+                    inference_request["cancel_inference"] = True
 
         return StreamingResponse(
             event_generator(),
