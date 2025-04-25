@@ -1383,7 +1383,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.session_stream_queue = {}
 
         if track_id not in self.session_stream_queue:
-            self.session_stream_queue[track_id] = asyncio.Queue()
+            self.session_stream_queue[track_id] = Queue()
 
         async def event_generator():
             q: Queue = self.session_stream_queue[track_id]
