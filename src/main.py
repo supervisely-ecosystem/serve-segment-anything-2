@@ -39,6 +39,7 @@ from supervisely.nn.inference.inference import (
 )
 from supervisely.api.video_annotation_tool_api import VideoAnnotationToolAction
 from supervisely.app.fastapi.utils import run_sync
+from starlette.requests import ClientDisconnect
 
 load_dotenv("supervisely.env")
 load_dotenv("debug.env")
@@ -1387,25 +1388,30 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         async def event_generator():
             q: Queue = self.session_stream_queue[track_id]
-            while True:
-                # Check for disconnection first
-                is_disconnected = await request.is_disconnected()
-                if is_disconnected:
-                    logger.debug("Client disconnected")
-                    inference_request = self._inference_requests.get(inference_request_uuid, None)
-                    if inference_request is not None:
-                        inference_request["cancel_inference"] = True
-                    break
-                
-                try:
-                    item = q.get(block=True, timeout=0.01)
-                    if item is None:
+            try:
+                while client_message := request.stream():
+                    # Check for disconnection first
+                    is_disconnected = await request.is_disconnected()
+                    if is_disconnected:
+                        logger.debug("Client disconnected")
+                        inference_request = self._inference_requests.get(inference_request_uuid, None)
+                        if inference_request is not None:
+                            inference_request["cancel_inference"] = True
                         break
-                    logger.debug("streaming item: %s", item)
-                    yield f"data: {json.dumps(item)}\n\n"
-                except Empty:
-                    await asyncio.sleep(0.01)
-                    continue
+                    try:
+                        item = q.get(block=True, timeout=0.01)
+                        if item is None:
+                            break
+                        logger.debug("streaming item: %s", item)
+                        yield f"data: {json.dumps(item)}\n\n"
+                    except Empty:
+                        await asyncio.sleep(0.01)
+                        continue
+            except ClientDisconnect:
+                logger.debug("Client disconnected")
+                inference_request = self._inference_requests.get(inference_request_uuid, None)
+                if inference_request is not None:
+                    inference_request["cancel_inference"] = True
 
         return StreamingResponse(
             event_generator(),
