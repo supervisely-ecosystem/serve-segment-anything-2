@@ -1172,40 +1172,57 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 global_stop_indicatior = True
                 raise
 
+        delay = 0.2
+        last_prog = 0
+        download_progress_thread_stop = threading.Event()
+        def _download_progress_notifier():
+            while True:
+                if download_progress_thread_stop.is_set():
+                    return
+                time.sleep(delay)
+                if last_prog != progress.current:
+                    if direct_progress:
+                        api.vid_ann_tool.set_direct_tracking_progress(
+                            session_id,
+                            video_id,
+                            track_id,
+                            frame_range=range_of_frames,
+                            progress_current=progress.current,
+                            progress_total=progress.total,
+                        )
+                    elif streaming_request:
+                        stream_queue = self.session_stream_queue.get(track_id, None)
+                        if stream_queue is None:
+                            raise RuntimeError(
+                                f"Unable to find stream queue for session {track_id}"
+                            )
+                        payload = {
+                            ApiField.TRACK_ID: track_id,
+                            ApiField.VIDEO_ID: video_id,
+                            ApiField.FRAME_RANGE: range_of_frames,
+                            ApiField.PROGRESS: {
+                                ApiField.CURRENT: progress.current,
+                                ApiField.TOTAL: progress.total,
+                            },
+                        }
+                        data = {
+                            ApiField.SESSION_ID: session_id,
+                            ApiField.ACTION: "progress",
+                            ApiField.PAYLOAD: payload,
+                        }
+                        stream_queue.put(data)
+
         def _download_progress_cb(cnt=1):
             if cnt == 0:
                 return
             progress.iters_done_report(cnt)
-            if direct_progress:
-                api.vid_ann_tool.set_direct_tracking_progress(
-                    session_id,
-                    video_id,
-                    track_id,
-                    frame_range=range_of_frames,
-                    progress_current=progress.current,
-                    progress_total=progress.total,
-                )
-            elif streaming_request:
-                stream_queue = self.session_stream_queue.get(track_id, None)
-                if stream_queue is None:
-                    raise RuntimeError(
-                        f"Unable to find stream queue for session {track_id}"
-                    )
-                payload = {
-                    ApiField.TRACK_ID: track_id,
-                    ApiField.VIDEO_ID: video_id,
-                    ApiField.FRAME_RANGE: range_of_frames,
-                    ApiField.PROGRESS: {
-                        ApiField.CURRENT: progress.current,
-                        ApiField.TOTAL: progress.total,
-                    },
-                }
-                data = {
-                    ApiField.SESSION_ID: session_id,
-                    ApiField.ACTION: "progress",
-                    ApiField.PAYLOAD: payload,
-                }
-                stream_queue.put(data)
+        
+        download_progress_thread = None
+        if direct_progress or streaming_request:
+            download_progress_thread = threading.Thread(
+                target=_download_progress_notifier, daemon=True
+            )
+            download_progress_thread.start()
 
         upload_queue = Queue()
         notify_queue = Queue()
@@ -1245,6 +1262,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 [f"{temp_frames_dir}/{i}.jpg" for i in range(frames_count + 1)],
                 progress_cb=_download_progress_cb,
             )
+
+            if download_progress_thread is not None:
+                download_progress_thread_stop.set()
 
             api.logger.debug("Initializing model...")
             # initialize model
