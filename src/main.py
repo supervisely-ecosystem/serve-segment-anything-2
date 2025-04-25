@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.build_sam import build_sam2, build_sam2_video_predictor
 from sam2.sam2_image_predictor import SAM2ImagePredictor
-from supervisely._utils import is_debug_with_sly_net, rand_str
+from supervisely._utils import run_coroutine, rand_str
 from supervisely.app.content import get_data_dir
 from supervisely.app.widgets import Field, Switch
 from supervisely.imaging import image as sly_image
@@ -1388,8 +1388,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         def event_generator():
             q: Queue = self.session_stream_queue[track_id]
             while True:
-                loop = asyncio.get_event_loop()
-                is_disconnected = loop.run_until_complete(request.is_disconnected())
+                is_disconnected = run_coroutine(request.is_disconnected())
                 if is_disconnected:
                     logger.debug("Client disconnected")
                     inference_request = self._inference_requests.get(inference_request_uuid, None)
