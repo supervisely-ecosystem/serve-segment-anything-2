@@ -1407,52 +1407,79 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             self.session_stream_queue[track_id] = Queue()
 
         stream_active = True
-        
+
         # Set up a background task to monitor disconnection
-        async def monitor_connection():
+        async def monitor_client():
             nonlocal stream_active
             try:
-                is_disconnected = await request.is_disconnected()
-                if is_disconnected:
-                    logger.debug("Client disconnected detected by monitor")
-                    stream_active = False
-                    # Cancel inference
-                    inference_request = self._inference_requests.get(inference_request_uuid, None)
-                    if inference_request is not None:
-                        inference_request["cancel_inference"] = True
-                    # Put a sentinel value to unblock the generator
-                    self.session_stream_queue[track_id].put(None)
-            except Exception as e:
-                logger.error(f"Error in connection monitor: {str(e)}")
+                # Listen for client messages
+                async for data in request.stream():
+                    if not data:
+                        continue
+                    
+                    try:
+                        # Try to parse the data as JSON
+                        message = data.decode('utf-8')
+                        logger.debug(f"Received client message: {message}")
+                        
+                        # Check for close command
+                        if message.get("action") == "close":
+                            logger.debug("Received close command from client")
+                            stream_active = False
+                            # Cancel inference
+                            inference_request = self._inference_requests.get(inference_request_uuid, None)
+                            if inference_request is not None:
+                                inference_request["cancel_inference"] = True
+                            # Put a sentinel to unblock the generator
+                            self.session_stream_queue[track_id].put(None)
+                            break
+                    except json.JSONDecodeError:
+                        logger.warning(f"Received invalid JSON from client: {data}")
+                        continue
+                
+                # If we exit the stream loop, the client disconnected
+                logger.debug("Client stream ended")
                 stream_active = False
-        
+                
+            except Exception as e:
+                logger.error(f"Error in client monitor: {str(e)}")
+                stream_active = False
+            finally:
+                # Also check for disconnection to be sure
+                try:
+                    is_disconnected = await request.is_disconnected()
+                    if is_disconnected:
+                        logger.debug("Client disconnected confirmed")
+                except Exception:
+                    pass
+
         # Start the monitoring task
-        disconnect_task = asyncio.create_task(monitor_connection())
+        disconnect_task = asyncio.create_task(monitor_client())
 
         async def event_generator():
             q: Queue = self.session_stream_queue[track_id]
             nonlocal stream_active
-            
+
             try:
                 # As long as we think the stream is active
                 while stream_active:
                     try:
                         # Try to get an item with a timeout
                         item = q.get(block=True, timeout=0.5)
-                        
+
                         # Exit condition
                         if item is None:
                             logger.debug("Received None sentinel, exiting generator")
                             break
-                            
+
                         # Check if we're still active before yielding
                         if not stream_active:
                             logger.debug("Stream marked inactive, exiting generator")
                             break
-                            
+
                         logger.debug("streaming item: %s", item)
                         yield f"data: {json.dumps(item)}\n\n"
-                        
+
                     except Empty:
                         # If queue is empty, check if we're still active
                         if not stream_active:
@@ -1460,7 +1487,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                             break
                         await asyncio.sleep(0.1)
                         continue
-                    
+
             except Exception as e:
                 logger.error(f"Error in event generator: {str(e)}")
                 stream_active = False
