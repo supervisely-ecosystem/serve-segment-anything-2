@@ -1405,161 +1405,112 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         if track_id not in self.session_stream_queue:
             self.session_stream_queue[track_id] = Queue()
-        
-        # Set up a special flag for this stream
+
         stream_active = True
-        
-        # Debug information to understand what we're working with
-        logger.debug(f"Request client: {request.client}")
-        logger.debug(f"Request method: {request.method}")
-        
-        # Try to get the raw ASGI application instance
-        asgi_app = request.scope.get("app", None)
-        logger.debug(f"ASGI app: {asgi_app}")
-        
-        # Access the raw receive/send callables if available
-        receive = request.scope.get("receive", None)
-        send = request.scope.get("send", None)
-        
-        # Customize your event_generator function to handle client messages
+
+        # Set up a background task to monitor disconnection
+        async def monitor_client():
+            nonlocal stream_active
+            try:
+                # Listen for client messages
+                async for data in request.stream():
+                    if not data:
+                        continue
+                    
+                    try:
+                        # Try to parse the data as JSON
+                        message = data.decode('utf-8')
+                        logger.debug(f"Received client message: {message}")
+                        
+                        # Check for close command
+                        if message.get("action") == "close":
+                            logger.debug("Received close command from client")
+                            stream_active = False
+                            # Cancel inference
+                            inference_request = self._inference_requests.get(inference_request_uuid, None)
+                            if inference_request is not None:
+                                inference_request["cancel_inference"] = True
+                            # Put a sentinel to unblock the generator
+                            self.session_stream_queue[track_id].put(None)
+                            break
+                    except json.JSONDecodeError:
+                        logger.warning(f"Received invalid JSON from client: {data}")
+                        continue
+                
+                # If we exit the stream loop, the client disconnected
+                logger.debug("Client stream ended")
+                stream_active = False
+                
+            except Exception as e:
+                logger.error(f"Error in client monitor: {str(e)}")
+                stream_active = False
+            finally:
+                # Also check for disconnection to be sure
+                try:
+                    is_disconnected = await request.is_disconnected()
+                    if is_disconnected:
+                        logger.debug("Client disconnected confirmed")
+                except Exception:
+                    pass
+
+        # Start the monitoring task
+        disconnect_task = asyncio.create_task(monitor_client())
+
         async def event_generator():
             q: Queue = self.session_stream_queue[track_id]
             nonlocal stream_active
-            
-            # Send initial headers first
-            if send:
-                await send({
-                    "type": "http.response.start",
-                    "status": 200,
-                    "headers": [
-                        (b"content-type", b"text/event-stream"),
-                        (b"cache-control", b"no-cache"),
-                        (b"connection", b"keep-alive"),
-                        (b"x-accel-buffering", b"no"),
-                    ],
-                })
-            
+
             try:
-                # Start a task to listen for client messages
-                async def listen_for_client():
-                    nonlocal stream_active
-                    if not receive:
-                        return
-                    
-                    try:
-                        while stream_active:
-                            message = await receive()
-                            logger.debug(f"Raw client message: {message}")
-                            
-                            if message["type"] == "http.disconnect":
-                                logger.debug("Client disconnected via http.disconnect")
-                                stream_active = False
-                                break
-                            
-                            if message["type"] == "http.request" and "body" in message:
-                                try:
-                                    body = message.get("body", b"")
-                                    if body:
-                                        body_text = body.decode("utf-8") if isinstance(body, bytes) else body
-                                        logger.debug(f"Client body: {body_text}")
-                                        
-                                        try:
-                                            data = json.loads(body_text)
-                                            logger.debug(f"Client JSON data: {data}")
-                                            
-                                            if data.get("action") == "close":
-                                                logger.debug("Received close command from client")
-                                                stream_active = False
-                                                break
-                                        except json.JSONDecodeError:
-                                            logger.debug(f"Non-JSON body: {body_text}")
-                                except Exception as e:
-                                    logger.error(f"Error processing message body: {str(e)}")
-                    except Exception as e:
-                        logger.error(f"Error in client listener: {str(e)}")
-                    finally:
-                        stream_active = False
-                
-                # Start the client listener if we have receive function
-                client_task = None
-                if receive:
-                    client_task = asyncio.create_task(listen_for_client())
-                
-                # Main loop for sending messages to client
+                # As long as we think the stream is active
                 while stream_active:
                     try:
                         # Try to get an item with a timeout
                         item = q.get(block=True, timeout=0.5)
-                        
+
                         # Exit condition
                         if item is None:
                             logger.debug("Received None sentinel, exiting generator")
                             break
-                        
-                        # Check if we're still active before sending
+
+                        # Check if we're still active before yielding
                         if not stream_active:
                             logger.debug("Stream marked inactive, exiting generator")
                             break
-                        
-                        logger.debug(f"Streaming item: {item}")
-                        
-                        # If we have the raw send function, use it directly
-                        if send:
-                            data = f"data: {json.dumps(item)}\n\n".encode("utf-8")
-                            await send({
-                                "type": "http.response.body",
-                                "body": data,
-                                "more_body": True
-                            })
-                        else:
-                            # Otherwise yield for StreamingResponse
-                            yield f"data: {json.dumps(item)}\n\n"
-                        
+
+                        logger.debug("streaming item: %s", item)
+                        yield f"data: {json.dumps(item)}\n\n"
+
                     except Empty:
+                        # If queue is empty, check if we're still active
                         if not stream_active:
+                            logger.debug("Stream marked inactive during wait, exiting generator")
                             break
                         await asyncio.sleep(0.1)
-                
-                # Send final empty body chunk to close response if using raw send
-                if send and stream_active:
-                    await send({
-                        "type": "http.response.body",
-                        "body": b"",
-                        "more_body": False
-                    })
-                
-                # Clean up the client listener task
-                if client_task and not client_task.done():
-                    client_task.cancel()
-                    
+                        continue
+
             except Exception as e:
                 logger.error(f"Error in event generator: {str(e)}")
-            finally:
                 stream_active = False
-                # Cancel inference
+            finally:
+                logger.debug(f"Event generator for track {track_id} is ending")
+                # Make sure we cancel our background task
+                if not disconnect_task.done():
+                    disconnect_task.cancel()
+                
+                # Ensure inference is canceled
                 inference_request = self._inference_requests.get(inference_request_uuid, None)
                 if inference_request is not None:
                     inference_request["cancel_inference"] = True
-                
-        # If we have access to raw ASGI functions, handle it directly
-        if send and receive:
-            logger.debug("Using raw ASGI send/receive")
-            # Start the generator as a task
-            asyncio.create_task(event_generator())
-            # Return a dummy response, as we're handling the response manually
-            return Response(status_code=200)
-        else:
-            # Fall back to StreamingResponse
-            logger.debug("Using StreamingResponse")
-            return StreamingResponse(
-                event_generator(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no"
-                }
-            )
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
 
     def serve(self):
         super().serve()
