@@ -1,4 +1,6 @@
+import asyncio
 import functools
+import json
 import os
 import threading
 import time
@@ -17,10 +19,11 @@ from cacheout import Cache
 from cachetools import LRUCache
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Request, Response, status
+from fastapi.responses import StreamingResponse
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.build_sam import build_sam2, build_sam2_video_predictor
 from sam2.sam2_image_predictor import SAM2ImagePredictor
-from supervisely._utils import is_debug_with_sly_net, rand_str
+from supervisely._utils import rand_str
 from supervisely.app.content import get_data_dir
 from supervisely.app.widgets import Field, Switch
 from supervisely.imaging import image as sly_image
@@ -35,6 +38,7 @@ from supervisely.nn.inference.inference import (
     _get_log_extra_for_inference_request,
 )
 from supervisely.volume_annotation.volume_annotation import Plane
+
 
 load_dotenv("supervisely.env")
 load_dotenv("debug.env")
@@ -1011,8 +1015,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     def _track_async(self, api: sly.Api, context: dict, request_uuid: str = None):
         self.set_cuda_properties()
         inference_request = self._inference_requests[request_uuid]
-        session_id = context.get("session_id", context["sessionId"])
+        session_id = context.get("session_id", context.get("sessionId"))
         direct_progress = context.get("useDirectProgressMessages", False)
+        streaming_request = context.get("streamingRequest", False)
         frame_index = context["frameIndex"]
         frames_count = context["frames"]
         track_id = context["trackId"]
@@ -1081,6 +1086,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                             extra={"inference_request_uuid": request_uuid},
                         )
                         global_stop_indicatior = True
+                        if streaming_request:
+                            stream_queue = self.session_stream_queue.get(track_id, None)
+                            if stream_queue is not None:
+                                stream_queue.put(None)
                         return
                     items = []  # (geometry, object_id, frame_index)
                     while not q.empty():
@@ -1106,11 +1115,36 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                                     progress_current=progress.current,
                                     progress_total=progress.total,
                                 )
+                            elif streaming_request:
+                                stream_queue = self.session_stream_queue.get(track_id, None)
+                                if stream_queue is None:
+                                    raise RuntimeError(
+                                        f"Unable to find stream queue for session {track_id}"
+                                    )
+                                payload = {
+                                    ApiField.TRACK_ID: track_id,
+                                    ApiField.VIDEO_ID: video_id,
+                                    ApiField.FRAME_RANGE: frame_range,
+                                    ApiField.PROGRESS: {
+                                        ApiField.CURRENT: progress.current,
+                                        ApiField.TOTAL: progress.total,
+                                    },
+                                }
+                                data = {
+                                    ApiField.SESSION_ID: session_id,
+                                    ApiField.ACTION: "progress",
+                                    ApiField.PAYLOAD: payload,
+                                }
+                                stream_queue.put(data)
                     else:
                         if stop_event.is_set():
                             api.logger.debug(
                                 "stop event is set. returning from notify loop"
                             )
+                            if streaming_request:
+                                stream_queue = self.session_stream_queue.get(track_id, None)
+                                if stream_queue is not None:
+                                    stream_queue.put(None)
                             return
                     time.sleep(1)
             except Exception as e:
@@ -1157,18 +1191,57 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 global_stop_indicatior = True
                 raise
 
+        delay = 0.2
+        last_prog = 0
+        download_progress_thread_stop = threading.Event()
+        def _download_progress_notifier():
+            while True:
+                if download_progress_thread_stop.is_set():
+                    return
+                time.sleep(delay)
+                if last_prog != progress.current:
+                    if direct_progress:
+                        api.vid_ann_tool.set_direct_tracking_progress(
+                            session_id,
+                            video_id,
+                            track_id,
+                            frame_range=range_of_frames,
+                            progress_current=progress.current,
+                            progress_total=progress.total,
+                        )
+                    elif streaming_request:
+                        stream_queue = self.session_stream_queue.get(track_id, None)
+                        if stream_queue is None:
+                            raise RuntimeError(
+                                f"Unable to find stream queue for session {track_id}"
+                            )
+                        payload = {
+                            ApiField.TRACK_ID: track_id,
+                            ApiField.VIDEO_ID: video_id,
+                            ApiField.FRAME_RANGE: range_of_frames,
+                            ApiField.PROGRESS: {
+                                ApiField.CURRENT: progress.current,
+                                ApiField.TOTAL: progress.total,
+                            },
+                        }
+                        data = {
+                            ApiField.SESSION_ID: session_id,
+                            ApiField.ACTION: "progress",
+                            ApiField.PAYLOAD: payload,
+                        }
+                        stream_queue.put(data)
+
         def _download_progress_cb(cnt=1):
             if cnt == 0:
                 return
             progress.iters_done_report(cnt)
-            api.vid_ann_tool.set_direct_tracking_progress(
-                session_id,
-                video_id,
-                track_id,
-                frame_range=range_of_frames,
-                progress_current=progress.current,
-                progress_total=progress.total,
+        
+        download_progress_thread = None
+        if direct_progress or streaming_request:
+            download_progress_thread = threading.Thread(
+                target=_download_progress_notifier, daemon=True
             )
+            download_progress_thread.start()
 
         upload_queue = Queue()
         notify_queue = Queue()
@@ -1189,6 +1262,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         inference_state = None
         api.logger.info("Start tracking.")
+        error = False
         try:
             temp_frames_dir = f"frames/{rand_str(10)}"
             # save frames to directory
@@ -1207,6 +1281,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 [f"{temp_frames_dir}/{i}.jpg" for i in range(frames_count + 1)],
                 progress_cb=_download_progress_cb,
             )
+
+            if download_progress_thread is not None:
+                download_progress_thread_stop.set()
 
             api.logger.debug("Initializing model...")
             # initialize model
@@ -1300,6 +1377,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                                 )
 
         except Exception as e:
+            error = True
             if direct_progress:
                 api.vid_ann_tool.set_direct_tracking_error(
                     session_id,
@@ -1307,8 +1385,28 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     track_id,
                     message=f"An error occured during tracking. Error: {e}",
                 )
-            error = True
-            raise
+            elif streaming_request:
+                try:
+                    stream_queue = self.session_stream_queue.get(track_id, None)
+                    if stream_queue is None:
+                        raise RuntimeError(
+                            f"Unable to find stream queue for session {track_id}"
+                        )
+                    payload = {
+                        ApiField.TRACK_ID: track_id,
+                        ApiField.VIDEO_ID: video_id,
+                        ApiField.TYPE: "error",
+                        ApiField.ERROR: {ApiField.MESSAGE: f"An error occured during tracking. Error: {e}"},
+                    }
+                    data = {
+                        ApiField.SESSION_ID: session_id,
+                        ApiField.ACTION: "progress",
+                        ApiField.PAYLOAD: payload,
+                    }
+                    stream_queue.put(data)
+                except Exception as notify_e:
+                    logger.error("Unable to notify about error: %s", str(notify_e), exc_info=True)
+            raise e
         else:
             error = False
         finally:
@@ -1328,6 +1426,47 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             else:
                 progress.message = "Ready"
                 progress.set(current=0, total=1, report=True)
+
+    async def _setup_stream(self, track_id, request: Request, inference_request_uuid: str):
+        if not hasattr(self, "session_stream_queue"):
+            self.session_stream_queue = {}
+
+        if track_id not in self.session_stream_queue:
+            self.session_stream_queue[track_id] = Queue()
+
+        async def check_connection():
+            while True:
+                if await request.is_disconnected():
+                    # Cancel inference
+                    logger.debug("Client disconnected, canceling inference")
+                    inference_request = self._inference_requests.get(inference_request_uuid, None)
+                    if inference_request is not None:
+                        inference_request["cancel_inference"] = True
+                    break
+
+        # Start the monitoring task
+        asyncio.create_task(check_connection())
+
+        async def event_generator():
+            q: Queue = self.session_stream_queue[track_id]
+
+            while True:
+                item = await q.get()
+                if item is None:
+                    logger.debug("streaming finished")
+                    break
+                logger.debug("streaming item: %s", item)
+                yield f"data: {json.dumps(item)}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
 
     def serve(self):
         super().serve()
@@ -1613,7 +1752,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             frame_range = context.get("frame_range", None)
             if frame_range is None:
                 frame_range = context.get("frameRange", None)
-            sly.logger.debug("frame_range: %s", frame_range)
             with inference_request["lock"]:
                 inference_request_copy = inference_request.copy()
                 inference_request_copy.pop("lock")
@@ -1718,6 +1856,33 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         @send_error_data
         def track(request: Request):
             self._track(request.state.api, request.state.context)
+
+        @server.post("/track_stream")
+        async def track_stream(request: Request):
+            context = request.state.context
+            logger.debug("track_stream request with context:", extra=context)
+            track_id = context["trackId"]
+            inference_request_uuid = uuid.uuid5(
+                namespace=uuid.NAMESPACE_URL, name=f"{time.time()}"
+            ).hex
+            context["streamingRequest"] = True
+            response = await self._setup_stream(track_id, request, inference_request_uuid)
+            self._on_inference_start(inference_request_uuid)
+            self._inference_requests[inference_request_uuid]["lock"] = threading.Lock()
+            future = self._executor.submit(
+                self._handle_error_in_async,
+                inference_request_uuid,
+                self._track_async,
+                self.api,
+                context,
+                inference_request_uuid,
+            )
+            end_callback = functools.partial(
+                self._on_inference_end, inference_request_uuid=inference_request_uuid
+            )
+            future.add_done_callback(end_callback)
+            self.session_stream_queue[track_id].put({"trackId": track_id, "action": "inference-started", "payload": {"inference_request_uuid": inference_request_uuid}})
+            return response
 
 
 m = SegmentAnything2(
