@@ -6,7 +6,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from queue import Queue, Empty
+from queue import Queue
 from typing import Any, Dict, List, Literal
 import uuid
 
@@ -37,9 +37,6 @@ from supervisely.nn.inference.inference import (
     _convert_sly_progress_to_dict,
     _get_log_extra_for_inference_request,
 )
-from supervisely.api.video_annotation_tool_api import VideoAnnotationToolAction
-from supervisely.app.fastapi.utils import run_sync
-from starlette.requests import ClientDisconnect
 
 load_dotenv("supervisely.env")
 load_dotenv("debug.env")
