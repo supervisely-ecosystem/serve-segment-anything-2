@@ -37,6 +37,8 @@ from supervisely.nn.inference.inference import (
     _convert_sly_progress_to_dict,
     _get_log_extra_for_inference_request,
 )
+from supervisely.volume_annotation.volume_annotation import Plane
+
 
 load_dotenv("supervisely.env")
 load_dotenv("debug.env")
@@ -55,8 +57,22 @@ def notqdm(iterable, *args, **kwargs):
     """
     return iterable
 
-
+def get_plane_name(normal):
+    if normal == {"x":1, "y":0, "z":0}:
+        return Plane.SAGITTAL
+    elif normal == {"x":0, "y":1, "z":0}:
+        return Plane.CORONAL
+    elif normal == {"x":0, "y":0, "z":1}:
+        return Plane.AXIAL
+    else:
+        return "Unknown"
+    
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # To process volume slices correctly with embeddings logic
+        self.process_volume = None
+
     def add_content_to_custom_tab(self, gui):
         self.select_config = SelectString(
             values=[
@@ -704,6 +720,12 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 for masks in out_mask_logits:
                     masks = (masks > 0.0).cpu().numpy()
                     sum_mask = np.any(masks, axis=0)
+                    if np.all(~sum_mask):
+                        logger.debug(
+                        "Empty mask detected",
+                        extra={**log_extra, "out_frame_idx": out_frame_idx},
+                        )
+                        continue
                     geometry = sly.Bitmap(sum_mask, extra_validation=False)
                     results[-1].append(
                         {"type": geometry.geometry_name(), "data": geometry.to_json()}
@@ -1341,9 +1363,18 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     for figure_id, masks in zip(out_obj_ids, out_mask_logits):
                         masks = (masks > 0.0).cpu().numpy()
                         for i, mask in enumerate(masks):
-                            sly_geometry = sly.Bitmap(mask, extra_validation=False)
-                            obj_id = figure_id_to_object_id[figure_id]
-                            upload_queue.put((sly_geometry, obj_id, cur_frame_index))
+                            if np.any(mask):
+                                sly_geometry = sly.Bitmap(mask, extra_validation=False)
+                                obj_id = figure_id_to_object_id[figure_id]
+                                upload_queue.put((sly_geometry, obj_id, cur_frame_index))
+                            else:
+                                logger.debug(
+                                    "Empty mask detected",
+                                    extra={
+                                        **log_extra,
+                                        "frame_index": cur_frame_index,
+                                    },
+                                )
 
         except Exception as e:
             error = True
@@ -1457,6 +1488,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 state = request.state.state
                 settings = self._get_inference_settings(state)
                 smtool_state = request.state.context
+                self.process_volume = smtool_state.get("volume") is not None
                 api = request.state.api
                 crop = smtool_state.get("crop")
                 positive_clicks, negative_clicks = (
@@ -1520,7 +1552,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 image_np = self._inference_image_cache.get(hash_str)
 
             # crop
-            image_path = os.path.join(app_dir, f"{time.time()}_{rand_str(10)}.jpg")
+            image_path = os.path.join(app_dir, f'{str(time.time()).replace(".", "_")}_{rand_str(10)}.jpg')
             if isinstance(image_np, list):
                 image_np = image_np[0]
             sly_image.write(image_path, image_np)
@@ -1554,12 +1586,18 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     settings["mode"] = "combined"
                 else:
                     settings["mode"] = "points"
-                if "image_id" in smtool_state:
-                    settings["input_image_id"] = smtool_state["image_id"]
-                elif "video" in smtool_state:
-                    settings["input_image_id"] = hash_str
-                elif "image_hash" in smtool_state:
-                    settings["input_image_id"] = smtool_state["image_hash"]
+                if self.process_volume:
+                    volume_id = smtool_state.get("volume").get("volume_id")
+                    volume_plane = get_plane_name(smtool_state.get("volume").get("normal"))
+                    slice_idx = smtool_state.get("volume").get("slice_index")
+                    settings["input_image_id"] = f"{volume_id}_{volume_plane}_{slice_idx}"
+                else:
+                    if "image_id" in smtool_state:
+                        settings["input_image_id"] = smtool_state["image_id"]
+                    elif "video" in smtool_state:
+                        settings["input_image_id"] = hash_str
+                    elif "image_hash" in smtool_state:
+                        settings["input_image_id"] = smtool_state["image_hash"]
                 if crop:
                     settings["bbox_coordinates"] = [
                         crop[0]["y"],

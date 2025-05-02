@@ -21,7 +21,6 @@
                 "PYTHONPATH": "${workspaceFolder}:${PYTHONPATH}",
                 "LOG_LEVEL": "DEBUG",
                 "ENV": "development",
-                "TEAM_ID": "4",
                 "DEBUG_WITH_SLY_NET": "1",
                 "SLY_APP_DATA_DIR": "app_data"
             }

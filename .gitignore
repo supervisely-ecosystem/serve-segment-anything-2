@@ -1,6 +1,5 @@
 sam2.1_weights/
 supervisely.env
-debug.env
 **/__pycache__/
 prompts/
 frames/
@@ -9,3 +8,4 @@ app_data/
 train/tempfiles/
 tests/
 test_results/
+debug.env
