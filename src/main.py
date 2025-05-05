@@ -6,7 +6,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from queue import Queue
+from queue import Queue, Empty
 from typing import Any, Dict, List, Literal
 import uuid
 
@@ -1434,8 +1434,15 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         if track_id not in self.session_stream_queue:
             self.session_stream_queue[track_id] = Queue()
 
+
+        finished = False
+
         async def check_connection():
+            nonlocal finished
             while True:
+                asyncio.sleep(0.1)
+                if finished:
+                    break
                 if await request.is_disconnected():
                     # Cancel inference
                     logger.debug("Client disconnected, canceling inference")
@@ -1448,15 +1455,20 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         asyncio.create_task(check_connection())
 
         async def event_generator():
+            nonlocal finished
             q: Queue = self.session_stream_queue[track_id]
 
             while True:
-                item = q.get()
-                if item is None:
-                    logger.debug("streaming finished")
-                    break
-                logger.debug("streaming item: %s", item)
-                yield f"data: {json.dumps(item)}\n\n"
+                try:
+                    item = q.get(timeout=0.1)
+                    if item is None:
+                        finished = True
+                        logger.debug("streaming finished")
+                        break
+                    logger.debug("streaming item: %s", item)
+                    yield f"data: {json.dumps(item)}\n\n"
+                except Empty:
+                    asyncio.sleep(0.1)
 
         return StreamingResponse(
             event_generator(),
