@@ -1451,7 +1451,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             q: Queue = self.session_stream_queue[track_id]
 
             while True:
-                item = await q.get()
+                item = q.get()
                 if item is None:
                     logger.debug("streaming finished")
                     break
