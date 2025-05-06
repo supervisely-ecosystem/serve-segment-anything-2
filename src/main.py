@@ -1082,7 +1082,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         return
                     if inference_request["cancel_inference"]:
                         logger.info(
-                            "Cancelling inference project...",
+                            "Cancelling inference...",
                             extra={"inference_request_uuid": request_uuid},
                         )
                         global_stop_indicatior = True
@@ -1165,7 +1165,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         return
                     if inference_request["cancel_inference"]:
                         logger.info(
-                            "Cancelling inference project...",
+                            "Cancelling inference...",
                             extra={"inference_request_uuid": request_uuid},
                         )
                         global_stop_indicatior = True
@@ -1351,7 +1351,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         return
                     if inference_request["cancel_inference"]:
                         logger.info(
-                            "Cancelling inference project...",
+                            "Cancelling inference...",
                             extra={"inference_request_uuid": request_uuid},
                         )
                         global_stop_indicatior = True
@@ -1420,6 +1420,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             stop_notify_event.set()
             if notify_thread.is_alive():
                 notify_thread.join()
+            if streaming_request:
+                stream_queue = self.session_stream_queue.get(track_id, None)
+                if stream_queue is not None:
+                    stream_queue.put(None)
             if error:
                 progress.message = "Error occured during tracking"
                 progress.set(current=0, total=1, report=True)
@@ -1434,15 +1438,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         if track_id not in self.session_stream_queue:
             self.session_stream_queue[track_id] = Queue()
 
-
-        finished = False
-
         async def check_connection():
-            nonlocal finished
             while True:
                 asyncio.sleep(0.1)
-                if finished:
-                    break
                 if await request.is_disconnected():
                     # Cancel inference
                     logger.debug("Client disconnected, canceling inference")
@@ -1455,20 +1453,19 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         asyncio.create_task(check_connection())
 
         async def event_generator():
-            nonlocal finished
             q: Queue = self.session_stream_queue[track_id]
 
             while True:
                 try:
                     item = q.get(timeout=0.1)
                     if item is None:
-                        finished = True
-                        logger.debug("streaming finished")
+                        logger.debug("Streaming finished")
                         break
-                    logger.debug("streaming item: %s", item)
+                    logger.debug("Streaming item: %s", item)
                     yield f"data: {json.dumps(item)}\n\n"
                 except Empty:
                     asyncio.sleep(0.1)
+            self.session_stream_queue.pop(track_id, None)
 
         return StreamingResponse(
             event_generator(),
