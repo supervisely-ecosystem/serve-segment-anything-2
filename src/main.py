@@ -1096,46 +1096,42 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         items.append(q.get_nowait())
                     if len(items) > 0:
                         api.logger.debug(f"got {len(items)} items to notify")
-                        items_by_object_id = {}
-                        for item in items:
-                            items_by_object_id.setdefault(item[1], []).append(item)
-
-                        for object_id, object_items in items_by_object_id.items():
-                            frame_range = [
-                                min(item[2] for item in object_items),
-                                max(item[2] for item in object_items),
-                            ]
-                            progress.iters_done_report(len(object_items))
-                            if direct_progress:
-                                api.vid_ann_tool.set_direct_tracking_progress(
-                                    session_id,
-                                    video_id,
-                                    track_id,
-                                    frame_range=frame_range,
-                                    progress_current=progress.current,
-                                    progress_total=progress.total,
+                        frame_range = [
+                            min(item[2] for item in items),
+                            max(item[2] for item in items),
+                        ]
+                        progress.iters_done_report(len(items))
+                        if direct_progress:
+                            api.vid_ann_tool.set_direct_tracking_progress(
+                                session_id,
+                                video_id,
+                                track_id,
+                                frame_range=frame_range,
+                                progress_current=progress.current,
+                                progress_total=progress.total,
+                            )
+                        elif streaming_request:
+                            stream_queue = self.session_stream_queue.get(track_id, None)
+                            if stream_queue is None:
+                                raise RuntimeError(
+                                    f"Unable to find stream queue for session {track_id}"
                                 )
-                            elif streaming_request:
-                                stream_queue = self.session_stream_queue.get(track_id, None)
-                                if stream_queue is None:
-                                    raise RuntimeError(
-                                        f"Unable to find stream queue for session {track_id}"
-                                    )
-                                payload = {
-                                    ApiField.TRACK_ID: track_id,
-                                    ApiField.VIDEO_ID: video_id,
-                                    ApiField.FRAME_RANGE: frame_range,
-                                    ApiField.PROGRESS: {
-                                        ApiField.CURRENT: progress.current,
-                                        ApiField.TOTAL: progress.total,
-                                    },
-                                }
-                                data = {
-                                    ApiField.SESSION_ID: session_id,
-                                    ApiField.ACTION: "progress",
-                                    ApiField.PAYLOAD: payload,
-                                }
-                                stream_queue.put(data)
+                            payload = {
+                                ApiField.TRACK_ID: track_id,
+                                ApiField.VIDEO_ID: video_id,
+                                ApiField.FRAME_RANGE: frame_range,
+                                ApiField.PROGRESS: {
+                                    ApiField.CURRENT: progress.current,
+                                    ApiField.TOTAL: progress.total,
+                                },
+                                "frameRangeFinished": False
+                            }
+                            data = {
+                                ApiField.SESSION_ID: session_id,
+                                ApiField.ACTION: "progress",
+                                ApiField.PAYLOAD: payload,
+                            }
+                            stream_queue.put(data)
                     else:
                         if stop_event.is_set():
                             api.logger.debug(
