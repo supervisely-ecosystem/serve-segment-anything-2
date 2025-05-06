@@ -1217,7 +1217,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if cnt == 0:
                 return
             progress.iters_done_report(cnt)
-
         download_progress_thread = None
         if direct_progress or streaming_request:
             download_progress_thread = threading.Thread(
