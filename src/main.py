@@ -1078,19 +1078,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             nonlocal global_stop_indicatior
             try:
                 while True:
-                    if global_stop_indicatior:
-                        return
-                    if inference_request["cancel_inference"]:
-                        logger.info(
-                            "Cancelling inference...",
-                            extra={"inference_request_uuid": request_uuid},
-                        )
-                        global_stop_indicatior = True
-                        if streaming_request:
-                            stream_queue = self.session_stream_queue.get(track_id, None)
-                            if stream_queue is not None:
-                                stream_queue.put(None)
-                        return
                     items = []  # (geometry, object_id, frame_index)
                     while not q.empty():
                         items.append(q.get_nowait())
@@ -1124,7 +1111,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                                     ApiField.CURRENT: progress.current,
                                     ApiField.TOTAL: progress.total,
                                 },
-                                "frameRangeFinished": False
                             }
                             data = {
                                 ApiField.SESSION_ID: session_id,
