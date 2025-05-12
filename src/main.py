@@ -1422,7 +1422,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         async def check_connection():
             while True:
-                asyncio.sleep(0.1)
+                await asyncio.sleep(0.1)
                 if await request.is_disconnected():
                     # Cancel inference
                     logger.debug("Client disconnected, canceling inference")
@@ -1439,14 +1439,15 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
             while True:
                 try:
-                    item = q.get(timeout=0.1)
+                    item = q.get_nowait()
                     if item is None:
                         logger.debug("Streaming finished")
                         break
                     logger.debug("Streaming item: %s", item)
                     yield f"data: {json.dumps(item)}\n\n"
+                    await asyncio.sleep(0.01)
                 except Empty:
-                    asyncio.sleep(0.1)
+                    await asyncio.sleep(0.1)
             self.session_stream_queue.pop(track_id, None)
 
         return StreamingResponse(
