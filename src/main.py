@@ -1554,7 +1554,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     logger.warn("Error loading image using cache", exc_info=True)
                     if "pcd_related_image_id" in smtool_state:
                         image_np = api.pointcloud.download_related_image(
-                            smtool_state["image_id"]
+                            smtool_state["pcd_related_image_id"]
                         )
                     else:
                         image_np = api.image.download_np(smtool_state["image_id"])
@@ -1616,6 +1616,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         settings["input_image_id"] = hash_str
                     elif "image_hash" in smtool_state:
                         settings["input_image_id"] = smtool_state["image_hash"]
+                    elif "pcd_related_image_id" in smtool_state:
+                        settings["input_image_id"] = smtool_state[
+                            "pcd_related_image_id"
+                        ]
                 if crop:
                     settings["bbox_coordinates"] = [
                         crop[0]["y"],
