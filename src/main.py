@@ -57,16 +57,18 @@ def notqdm(iterable, *args, **kwargs):
     """
     return iterable
 
+
 def get_plane_name(normal):
-    if normal == {"x":1, "y":0, "z":0}:
+    if normal == {"x": 1, "y": 0, "z": 0}:
         return Plane.SAGITTAL
-    elif normal == {"x":0, "y":1, "z":0}:
+    elif normal == {"x": 0, "y": 1, "z": 0}:
         return Plane.CORONAL
-    elif normal == {"x":0, "y":0, "z":1}:
+    elif normal == {"x": 0, "y": 0, "z": 1}:
         return Plane.AXIAL
     else:
         return "Unknown"
-    
+
+
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -722,8 +724,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     sum_mask = np.any(masks, axis=0)
                     if np.all(~sum_mask):
                         logger.debug(
-                        "Empty mask detected",
-                        extra={**log_extra, "out_frame_idx": out_frame_idx},
+                            "Empty mask detected",
+                            extra={**log_extra, "out_frame_idx": out_frame_idx},
                         )
                         continue
                     geometry = sly.Bitmap(sum_mask, extra_validation=False)
@@ -1124,7 +1126,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                                 "stop event is set. returning from notify loop"
                             )
                             if streaming_request:
-                                stream_queue = self.session_stream_queue.get(track_id, None)
+                                stream_queue = self.session_stream_queue.get(
+                                    track_id, None
+                                )
                                 if stream_queue is not None:
                                     stream_queue.put(None)
                             return
@@ -1176,6 +1180,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         delay = 0.2
         last_prog = 0
         download_progress_thread_stop = threading.Event()
+
         def _download_progress_notifier():
             while True:
                 if download_progress_thread_stop.is_set():
@@ -1217,6 +1222,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if cnt == 0:
                 return
             progress.iters_done_report(cnt)
+
         download_progress_thread = None
         if direct_progress or streaming_request:
             download_progress_thread = threading.Thread(
@@ -1347,7 +1353,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                             if np.any(mask):
                                 sly_geometry = sly.Bitmap(mask, extra_validation=False)
                                 obj_id = figure_id_to_object_id[figure_id]
-                                upload_queue.put((sly_geometry, obj_id, cur_frame_index))
+                                upload_queue.put(
+                                    (sly_geometry, obj_id, cur_frame_index)
+                                )
                             else:
                                 logger.debug(
                                     "Empty mask detected",
@@ -1378,7 +1386,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         ApiField.TRACK_ID: track_id,
                         ApiField.VIDEO_ID: video_id,
                         ApiField.TYPE: "error",
-                        ApiField.ERROR: {ApiField.MESSAGE: f"An error occured during tracking. Error: {e}"},
+                        ApiField.ERROR: {
+                            ApiField.MESSAGE: f"An error occured during tracking. Error: {e}"
+                        },
                     }
                     data = {
                         ApiField.SESSION_ID: session_id,
@@ -1387,7 +1397,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     }
                     stream_queue.put(data)
                 except Exception as notify_e:
-                    logger.error("Unable to notify about error: %s", str(notify_e), exc_info=True)
+                    logger.error(
+                        "Unable to notify about error: %s", str(notify_e), exc_info=True
+                    )
             raise e
         else:
             error = False
@@ -1413,7 +1425,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 progress.message = "Ready"
                 progress.set(current=0, total=1, report=True)
 
-    async def _setup_stream(self, track_id, request: Request, inference_request_uuid: str):
+    async def _setup_stream(
+        self, track_id, request: Request, inference_request_uuid: str
+    ):
         if not hasattr(self, "session_stream_queue"):
             self.session_stream_queue = {}
 
@@ -1426,7 +1440,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 if await request.is_disconnected():
                     # Cancel inference
                     logger.debug("Client disconnected, canceling inference")
-                    inference_request = self._inference_requests.get(inference_request_uuid, None)
+                    inference_request = self._inference_requests.get(
+                        inference_request_uuid, None
+                    )
                     if inference_request is not None:
                         inference_request["cancel_inference"] = True
                     break
@@ -1455,8 +1471,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "X-Accel-Buffering": "no"
-            }
+                "X-Accel-Buffering": "no",
+            },
         )
 
     def serve(self):
@@ -1536,14 +1552,21 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     )
                 except Exception:
                     logger.warn("Error loading image using cache", exc_info=True)
-                    image_np = api.image.download_np(smtool_state["image_id"])
+                    if "pcd_related_image_id" in smtool_state:
+                        image_np = api.pointcloud.download_related_image(
+                            smtool_state["image_id"]
+                        )
+                    else:
+                        image_np = api.image.download_np(smtool_state["image_id"])
                 self._inference_image_cache.set(hash_str, image_np)
             else:
                 logger.debug(f"image found in cache: {hash_str}")
                 image_np = self._inference_image_cache.get(hash_str)
 
             # crop
-            image_path = os.path.join(app_dir, f'{str(time.time()).replace(".", "_")}_{rand_str(10)}.jpg')
+            image_path = os.path.join(
+                app_dir, f'{str(time.time()).replace(".", "_")}_{rand_str(10)}.jpg'
+            )
             if isinstance(image_np, list):
                 image_np = image_np[0]
             sly_image.write(image_path, image_np)
@@ -1579,9 +1602,13 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     settings["mode"] = "points"
                 if self.process_volume:
                     volume_id = smtool_state.get("volume").get("volume_id")
-                    volume_plane = get_plane_name(smtool_state.get("volume").get("normal"))
+                    volume_plane = get_plane_name(
+                        smtool_state.get("volume").get("normal")
+                    )
                     slice_idx = smtool_state.get("volume").get("slice_index")
-                    settings["input_image_id"] = f"{volume_id}_{volume_plane}_{slice_idx}"
+                    settings["input_image_id"] = (
+                        f"{volume_id}_{volume_plane}_{slice_idx}"
+                    )
                 else:
                     if "image_id" in smtool_state:
                         settings["input_image_id"] = smtool_state["image_id"]
@@ -1858,7 +1885,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 namespace=uuid.NAMESPACE_URL, name=f"{time.time()}"
             ).hex
             context["streamingRequest"] = True
-            response = await self._setup_stream(track_id, request, inference_request_uuid)
+            response = await self._setup_stream(
+                track_id, request, inference_request_uuid
+            )
             self._on_inference_start(inference_request_uuid)
             self._inference_requests[inference_request_uuid]["lock"] = threading.Lock()
             future = self._executor.submit(
@@ -1873,7 +1902,13 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 self._on_inference_end, inference_request_uuid=inference_request_uuid
             )
             future.add_done_callback(end_callback)
-            self.session_stream_queue[track_id].put({"trackId": track_id, "action": "inference-started", "payload": {"inference_request_uuid": inference_request_uuid}})
+            self.session_stream_queue[track_id].put(
+                {
+                    "trackId": track_id,
+                    "action": "inference-started",
+                    "payload": {"inference_request_uuid": inference_request_uuid},
+                }
+            )
             return response
 
 
