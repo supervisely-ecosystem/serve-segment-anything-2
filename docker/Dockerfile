@@ -39,4 +39,4 @@ RUN curl -L -o /sam2.1_weights/sam2.1_hiera_large.pt "https://dl.fbaipublicfiles
 
 RUN python3 -m pip install --no-cache-dir supervisely==6.73.371
 
-LABEL python_sdk_version=6.73.330
+LABEL python_sdk_version=6.73.371
