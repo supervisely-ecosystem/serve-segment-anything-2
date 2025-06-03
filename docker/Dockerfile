@@ -37,6 +37,6 @@ RUN curl -L -o /sam2.1_weights/sam2.1_hiera_small.pt "https://dl.fbaipublicfiles
 RUN curl -L -o /sam2.1_weights/sam2.1_hiera_base_plus.pt "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt"
 RUN curl -L -o /sam2.1_weights/sam2.1_hiera_large.pt "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt"
 
-RUN python3 -m pip install --no-cache-dir supervisely==6.73.330
+RUN python3 -m pip install --no-cache-dir supervisely==6.73.371
 
 LABEL python_sdk_version=6.73.330
