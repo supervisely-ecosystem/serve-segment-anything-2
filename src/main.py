@@ -604,8 +604,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         smarttool_input = figure.meta.get("smartToolInput", None)
         if smarttool_input is None:
             return None
-        crop = smarttool_input["crop"]
-        crop = [*crop[0], *crop[1]]
+        crop = smarttool_input.get("crop")
+        if crop:
+            crop = [*crop[0], *crop[1]]
         positive = smarttool_input["positive"]
         negative = smarttool_input["negative"]
         visible = smarttool_input["visible"]
