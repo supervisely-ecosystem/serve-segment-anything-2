@@ -1684,6 +1684,21 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             response = {"is_online": True}
             return response
 
+        @server.post("/smart_segmentation_batch")
+        def smart_segmentation_batched(response: Response, request: Request):
+            response_batch = {}
+            data = request.state.context["data_to_process"]
+            app_session_id = sly.io.env.task_id()
+            for image_idx, image_data in data.items():
+                image_prediction = api.task.send_request(
+                    app_session_id,
+                    "smart_segmentation",
+                    data={},
+                    context=image_data,
+                )
+                response_batch[image_idx] = image_prediction
+            return response_batch
+
         @server.post("/smart_segmentation_batched")
         def smart_segmentation_batched(response: Response, request: Request):
             response_batch = {}
