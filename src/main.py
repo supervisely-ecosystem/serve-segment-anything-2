@@ -1684,6 +1684,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             response = {"is_online": True}
             return response
 
+        @server.post("/smart_segmentation_batch")
         @server.post("/smart_segmentation_batched")
         def smart_segmentation_batched(response: Response, request: Request):
             response_batch = {}
