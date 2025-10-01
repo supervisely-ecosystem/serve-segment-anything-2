@@ -1381,6 +1381,13 @@ def start_training():
     dataset_infos = [
         api.dataset.get_info_by_id(dataset_id) for dataset_id in dataset_ids
     ]
+    # Filter out None values (datasets that don't exist or user has no access)
+    dataset_infos = [info for info in dataset_infos if info is not None]
+    if not dataset_infos:
+        raise ValueError(
+            "No valid datasets were found. The selected datasets may not exist or you don't have permission to access them."
+        )
+
     download_project(
         api=api,
         project_info=project_info,
