@@ -57,7 +57,7 @@ Video object segmentation and tracking:
     <source src="https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/v0.0.1/sam2_video_tracking.mp4" type="video/mp4">
 </video>
 
-Automatic image mask generation without any prompts via [NN Image Labeling app](../../../../supervisely-ecosystem/nn-image-labeling/annotation-tool):
+Automatic image mask generation without any prompts via [NN Image Labeling app](../../../../../supervisely-ecosystem/nn-image-labeling/annotation-tool):
 
 <video width="100%" preload="auto" autoplay muted loop>
     <source src="https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/v0.0.1/sam2_auto_mask_gen_speedup.mp4" type="video/mp4">
