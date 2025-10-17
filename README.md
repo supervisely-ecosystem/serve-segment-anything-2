@@ -11,7 +11,7 @@
   <a href="#Acknowledgment">Acknowledgment</a> 
 </p>
 
-[![](https://img.shields.io/badge/supervisely-ecosystem-brightgreen)](../../../../supervisely-ecosystem/serve-segment-anything-2)
+[![](https://img.shields.io/badge/supervisely-ecosystem-brightgreen)](https://ecosystem.supervisely.com/apps/supervisely-ecosystem/serve-segment-anything-2)
 [![](https://img.shields.io/badge/slack-chat-green.svg?logo=slack)](https://supervisely.com/slack)
 ![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/supervisely-ecosystem/serve-segment-anything-2)
 [![views](https://app.supervisely.com/img/badges/views/supervisely-ecosystem/serve-segment-anything-2.png)](https://supervisely.com)
@@ -69,7 +69,7 @@ Applying model to object in bounding box:
     <source src="https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/v0.0.1/sam2_bbox.mp4" type="video/mp4">
 </video>
 
-Fast labeling of images batch via [Batched Smart Tool](../../../../supervisely-ecosystem/dev-smart-tool-batched):
+Fast labeling of images batch via [Batched Smart Tool](https://ecosystem.supervisely.com/apps/dev-smart-tool-batched):
 
 <video width="100%" preload="auto" autoplay muted loop>
     <source src="https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/v0.0.1/sam2_batched_smart_tool.mp4" type="video/mp4">
