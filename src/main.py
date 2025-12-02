@@ -1625,8 +1625,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     settings["bbox_coordinates"] = [
                         crop[0]["y"],
                         crop[0]["x"],
-                        crop[1]["y"],
-                        crop[1]["x"],
+                        crop[1]["y"] + 1,
+                        crop[1]["x"] + 1,
                     ]
                     settings["bbox_class_name"] = "target"
                 point_coordinates, point_labels = [], []
@@ -1702,7 +1702,6 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 )
                 result.append(image_prediction)
             return result
-
 
         @server.post("/smart_segmentation_batched")
         def smart_segmentation_batched(response: Response, request: Request):
