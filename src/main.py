@@ -1653,7 +1653,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     l = max(0, l)
                     b = min(pred_mask.shape[0], b)
                     r = min(pred_mask.shape[1], r)
-                    bitmap_data = pred_mask[t:b, l:r]
+                    bitmap_data = pred_mask[t:b + 1, l:r + 1]
                     bitmap = sly.Bitmap(
                         bitmap_data,
                         origin=sly.PointLocation(t, l),
