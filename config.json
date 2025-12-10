@@ -26,8 +26,8 @@
         "bitmap"
     ],
     "community_agent": false,
-    "docker_image": "supervisely/segment-anything-2:1.0.17",
-    "instance_version": "6.15.2",
+    "docker_image": "supervisely/segment-anything-2:1.0.18",
+    "instance_version": "6.15.35",
     "entrypoint": "python3 -m uvicorn src.main:m.app --app-dir ./serve --host 0.0.0.0 --port 8000 --ws websockets",
     "port": 8000,
     "task_location": "application_sessions",
