@@ -11,8 +11,8 @@
         "train"
     ],
     "description": "Dashboard for SAM 2.1 fine-tuning",
-    "docker_image": "supervisely/segment-anything-2:1.0.17",
-    "instance_version": "6.15.2",
+    "docker_image": "supervisely/segment-anything-2:1.0.18",
+    "instance_version": "6.15.35",
     "entrypoint": "python3 -m uvicorn src.main:app --app-dir ./train --host 0.0.0.0 --port 8000 --ws websockets",
     "task_location": "workspace_tasks",
     "need_gpu": true,
