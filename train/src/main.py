@@ -858,7 +858,10 @@ def _update_select_classes_button(selected_classes):
 @select_data_button.click
 def select_input_data():
     selected_datasets = set()
-    for dataset_id in dataset_selector.get_selected_ids():
+    selected_dataset_ids = dataset_selector.get_selected_ids()
+    if not selected_dataset_ids:
+        raise ValueError("No datasets were selected. Please select at least one dataset before proceeding.")
+    for dataset_id in selected_dataset_ids:
         selected_datasets.add(dataset_id)
         for ds in api.dataset.get_nested(project_id=project_id, dataset_id=dataset_id):
             selected_datasets.add(ds.id)
