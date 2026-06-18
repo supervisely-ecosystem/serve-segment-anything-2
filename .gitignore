@@ -9,3 +9,4 @@ train/tempfiles/
 tests/
 test_results/
 debug.env
+CLAUDE.md

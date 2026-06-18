@@ -2,6 +2,7 @@ import asyncio
 import functools
 import json
 import os
+import random
 import threading
 import time
 import traceback
@@ -38,7 +39,6 @@ from supervisely.nn.inference.inference import (
     _get_log_extra_for_inference_request,
 )
 from supervisely.volume_annotation.volume_annotation import Plane
-
 
 load_dotenv("supervisely.env")
 load_dotenv("debug.env")
@@ -222,6 +222,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         # TODO: add maxsize after discuss
         self._inference_image_cache = Cache(ttl=60)
         self._init_mask_cache = LRUCache(maxsize=100)  # cache of sly.Bitmaps
+        # maps "imageId_x1_y1_x2_y2" -> figure_id so that repeated clicks on the
+        # same image+crop are treated as corrections of an existing figure
+        self._smarttool_figure_cache = {}
 
     def get_info(self):
         info = super().get_info()
@@ -1573,7 +1576,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             sly_image.write(image_path, image_np)
 
             # Prepare init_mask (only for images)
-            figure_id = smtool_state.get("figure_id")
+            # figure_id = smtool_state.get("figure_id")
+            figure_id = None
             image_id = smtool_state.get("image_id")
             if smtool_state.get("init_figure") is True and image_id is not None:
                 # Download and save in Cache
@@ -1663,9 +1667,150 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     bitmap_data = pred_mask
                     bitmap = sly.Bitmap(bitmap_data)
                 logger.debug(f"smart_segmentation inference done!")
+
+                # resolve figure id from smtool state, falling back to the
+                # correction cache: the same image id + crop coordinates mean we
+                # are correcting an existing figure rather than creating a new one
+                image_id = smtool_state.get("image_id")
+                if crop:
+                    crop_cache_key = (
+                        f"{image_id}_{crop[0]['x']}_{crop[0]['y']}"
+                        f"_{crop[1]['x']}_{crop[1]['y']}"
+                    )
+                else:
+                    crop_cache_key = str(image_id)
+                if figure_id is None:
+                    figure_id = self._smarttool_figure_cache.get(crop_cache_key)
+
+                # select target class from the test classes
+                candidate_classes = ["test_A", "test_B", "test_C"]
+                if figure_id is not None:
+                    # correcting an existing figure: switch to a different class
+                    current_class_name = None
+                    class_id = smtool_state.get("class_id")
+                    if class_id is not None:
+                        class_info = api.object_class.get_info_by_id(class_id)
+                        current_class_name = class_info.name
+                    class_name = random.choice(
+                        [c for c in candidate_classes if c != current_class_name]
+                    )
+                else:
+                    # creating a figure for the first time: pick any test class
+                    class_name = random.choice(candidate_classes)
+
+                # resolve image and project
+                image_id = smtool_state.get("image_id")
+                image_info = api.image.get_info_by_id(image_id)
+                project_id = image_info.project_id
+                toolbox_session_id = smtool_state.get("toolbox_session_id")
+
+                # add the class to project meta if it is missing
+                project_meta_json = api.project.get_meta(project_id)
+                project_meta = sly.ProjectMeta.from_json(project_meta_json)
+                if not project_meta.get_obj_class(class_name):
+                    project_meta = project_meta.add_obj_class(
+                        sly.ObjClass(class_name, sly.Bitmap)
+                    )
+                    api.project.update_meta(project_id, project_meta.to_json())
+
+                # remove the existing figure when correcting a mask
+                if figure_id is not None:
+                    # api.headers["x-toolbox-session-id"] = toolbox_session_id
+                    payload_extra = {}
+                    # if toolbox_session_id is not None:
+                    #     payload_extra["toolboxSessionId"] = toolbox_session_id
+
+                    # response = api.post(
+                    #     "figures.bulk.remove",
+                    #     {ApiField.FIGURE_IDS: [figure_id], **payload_extra},
+                    # )
+
+                    # extract image id from smtool state
+                    image_id = smtool_state.get("image_id")
+
+                    # get project id
+                    image_info = api.image.get_info_by_id(image_id)
+                    project_id = image_info.project_id
+
+                    # get class name to id mapping
+                    class_name_to_id_map = api.object_class.get_name_to_id_map(
+                        project_id
+                    )
+
+                    # get predicted class id
+                    class_id = class_name_to_id_map[class_name]
+
+                    payload = {
+                        # ApiField.ID: label_id,
+                        ApiField.ID: figure_id,
+                        # ApiField.TAGS: [tag.to_json() for tag in label.tags],
+                        ApiField.GEOMETRY: bitmap.to_json(),
+                        # ApiField.NN_CREATED: label._nn_created,
+                        # ApiField.NN_UPDATED: label._nn_updated,
+                        ApiField.CLASS_ID: class_id,
+                        # "toolboxSessionId": toolbox_session_id,
+                    }
+                    response = self._api.post("figures.editInfo", payload)
+
+                else:
+                    # build labels for the predicted mask
+                    target_obj_class = sly.ObjClass(class_name, sly.Bitmap)
+                    pred_masks = [bitmap]
+                    labels = [sly.Label(mask, target_obj_class) for mask in pred_masks]
+
+                    # upload the new figures via api
+                    class_name_to_id_map = api.object_class.get_name_to_id_map(
+                        project_id
+                    )
+                    class_id = class_name_to_id_map[class_name]
+                    payload = []
+                    for label in labels:
+                        _label_json = label.to_json()
+                        _label_json["geometry"] = label.geometry.to_json()
+                        _label_json["classId"] = class_id
+                        payload.append(_label_json)
+                    for batch_jsons in sly.batched(payload, batch_size=100):
+                        response = api.post(
+                            "figures.bulk.add",
+                            {
+                                ApiField.ENTITY_ID: image_id,
+                                ApiField.FIGURES: batch_jsons,
+                                ApiField.SKIP_BOUNDS_VALIDATION: True,
+                                "toolboxSessionId": toolbox_session_id,
+                            },
+                        )
+                        figure_id = response.json()[0][ApiField.ID]
+                        # remember the new figure id so the next request with the
+                        # same image id + crop is treated as a correction
+                        self._smarttool_figure_cache[crop_cache_key] = figure_id
+
+                # annotations were uploaded to the platform; the SDK does not
+                # support fully-empty bitmaps, so return a nearly-empty bitmap
+                # with a single non-zero pixel in the top-left corner of the
+                # crop, with a shape 1 pixel smaller than the crop width / height
+                if crop:
+                    t, l, b, r = settings["bbox_coordinates"]
+                    t = max(0, t)
+                    l = max(0, l)
+                    b = min(pred_mask.shape[0], b)
+                    r = min(pred_mask.shape[1], r)
+                else:
+                    t, l, b, r = 0, 0, pred_mask.shape[0], pred_mask.shape[1]
+                empty_h = max(1, (b - t) - 1)
+                empty_w = max(1, (r - l) - 1)
+                empty_data = np.zeros((empty_h, empty_w), dtype=bool)
+                empty_data[0, 0] = True
+                empty_bitmap = sly.Bitmap(
+                    empty_data,
+                    origin=sly.PointLocation(t, l),
+                    extra_validation=False,
+                )
                 response = {
-                    "origin": {"x": bitmap.origin.col, "y": bitmap.origin.row},
-                    "bitmap": bitmap.data_2_base64(bitmap.data),
+                    "origin": {
+                        "x": empty_bitmap.origin.col,
+                        "y": empty_bitmap.origin.row,
+                    },
+                    "bitmap": empty_bitmap.data_2_base64(empty_bitmap.data),
                     "success": True,
                     "error": None,
                 }
