@@ -38,7 +38,7 @@ from supervisely.nn.inference.inference import (
     _get_log_extra_for_inference_request,
 )
 from supervisely.volume_annotation.volume_annotation import Plane
-
+import random
 
 load_dotenv("supervisely.env")
 load_dotenv("debug.env")
@@ -1499,6 +1499,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 self.process_volume = smtool_state.get("volume") is not None
                 api = request.state.api
                 crop = smtool_state.get("crop")
+                local_figure_id = smtool_state.get("local_figure_id")
                 positive_clicks, negative_clicks = (
                     smtool_state["positive"],
                     smtool_state["negative"],
@@ -1645,6 +1646,52 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 logger.debug("Predict done")
                 self._inference_image_lock.release()
                 silent_remove(image_path)
+
+            # select target class from the test classes
+            candidate_classes = ["test_A", "test_B", "test_C"]
+            if figure_id is not None:
+                # correcting an existing figure: switch to a different class
+                current_class_name = None
+                class_id = smtool_state.get("class_id")
+                if class_id is not None:
+                    class_info = api.object_class.get_info_by_id(class_id)
+                    current_class_name = class_info.name
+                class_name = random.choice(
+                    [c for c in candidate_classes if c != current_class_name]
+                )
+            else:
+                # creating a figure for the first time: pick any test class
+                class_name = random.choice(candidate_classes)
+
+            # resolve image and project
+            image_id = smtool_state.get("image_id")
+            image_info = api.image.get_info_by_id(image_id)
+            project_id = image_info.project_id
+
+            # add the class to project meta if it is missing
+            project_meta_json = api.project.get_meta(project_id)
+            project_meta = sly.ProjectMeta.from_json(project_meta_json)
+            if not project_meta.get_obj_class(class_name):
+                project_meta = project_meta.add_obj_class(
+                    sly.ObjClass(class_name, sly.Bitmap)
+                )
+                api.project.update_meta(project_id, project_meta.to_json())
+
+            # get class name to id mapping
+            class_name_to_id_map = api.object_class.get_name_to_id_map(project_id)
+
+            # get predicted class id
+            class_id = class_name_to_id_map[class_name]
+
+            # get toolbox session id
+            toolbox_session_id = smtool_state.get("toolbox_session_id")
+
+            payload = {
+                "sessionId": toolbox_session_id,
+                "action": "figures/setFigureClass",
+                "payload": {"classId": class_id, "localFigureId": local_figure_id},
+            }
+            self._api.post("annotation-tool.run-action", payload)
 
             if pred_mask.any():
                 if crop:
