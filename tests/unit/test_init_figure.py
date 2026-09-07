@@ -185,6 +185,21 @@ def test_multipolygon_parts_are_unioned_and_holes_stay_local():
     assert not mask[15, 15]  # gap between the parts
 
 
+def test_multipolygon_hole_never_erases_another_part_whatever_the_part_order():
+    """A hole belongs to its own part, so the union must be order-independent."""
+    covering = {"exterior": rect_ring(6, 6, 14, 14), "interior": []}
+    holed = {"exterior": rect_ring(0, 0, 10, 10), "interior": [rect_ring(3, 3, 7, 7)]}
+
+    holed_first = label_to_mask(multipolygon_label(parts=[holed, covering]), 20, 30)
+    holed_last = label_to_mask(multipolygon_label(parts=[covering, holed]), 20, 30)
+
+    # drawn last, the holed part must not punch its hole through the other part
+    assert holed_last[6, 6]
+    # ... while the part of the hole nothing else covers stays empty
+    assert not holed_last[4, 4]
+    assert holed_last.tolist() == holed_first.tolist()
+
+
 def test_multipolygon_parts_may_be_nested_under_points():
     parts = [{"exterior": rect_ring(1, 1, 3, 3), "interior": []}]
     label = {"id": 7, "geometryType": "multipolygon", "points": {"parts": parts}}

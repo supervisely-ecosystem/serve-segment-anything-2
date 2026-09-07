@@ -1,0 +1,14 @@
+# Extra dependencies for the offline (CPU-only) unit tests.
+#
+# The tests run inside the app image declared in config.json, against the SDK
+# that is already installed there (supervisely==6.73.486, see docker/Dockerfile).
+# Only the pins that the image itself needs are listed here; nothing that would
+# pull in a newer SDK, model weights or CUDA.
+#
+# supervisely==6.73.486 declares `setuptools<81.0.0` and validates it at import
+# time through pkg_resources, so a newer setuptools in the test environment
+# makes `import supervisely` raise ContextualVersionConflict.
+setuptools<81.0.0
+# Same story for urllib3: the SDK declares `urllib3<=2.2.3,>=1.26.15`, and the
+# test environment otherwise resolves a newer one as a `requests` dependency.
+urllib3<=2.2.3,>=1.26.15

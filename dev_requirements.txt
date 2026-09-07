@@ -1,7 +1,0 @@
-# Extra requirements for running the offline unit tests (tests/unit) against
-# the SDK that is already bundled into the app image (docker/Dockerfile).
-# supervisely==6.73.486 declares setuptools<81.0.0, so a newer setuptools in the
-# test environment breaks `import supervisely`.
-setuptools<81.0.0
-urllib3<=2.2.3,>=1.26.15
-pytest

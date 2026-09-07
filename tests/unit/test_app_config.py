@@ -50,6 +50,19 @@ def test_dockerfile_sdk_pin_matches_the_image_label():
     assert installed.group(1) == labeled.group(1)
 
 
+def test_main_no_longer_uses_the_bitmap_only_sdk_initial_mask_helper():
+    """The SDK bundled in this image decodes initial figures as bitmaps only.
+
+    ``src/main.py`` must go through the local adapter instead, otherwise polygon
+    and multipolygon initial figures break again.
+    """
+    with open(os.path.join(REPO_ROOT, "src", "main.py"), "r") as file:
+        source = file.read()
+
+    assert "functional.download_init_mask" not in source
+    assert "functional.bitmap_to_mask" not in source
+
+
 def test_smart_segmentation_route_calls_the_extracted_handler():
     """``src/main.py`` must delegate the route to the tested handler."""
     with open(os.path.join(REPO_ROOT, "src", "main.py"), "r") as file:
