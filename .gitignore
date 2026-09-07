@@ -6,6 +6,7 @@ frames/
 app_data/
 .venv/
 train/tempfiles/
-tests/
+tests/*
+!tests/unit/
 test_results/
 debug.env
