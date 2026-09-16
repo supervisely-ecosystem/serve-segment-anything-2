@@ -155,6 +155,25 @@ def download_frames_to_paths(cache, api, video_id, frame_indexes, paths, progres
         )
 
 
+# Load a track's frames synchronously, which costs half the memory.
+#
+# SAM2's `_load_img_as_tensor` does `img_np / 255.0` on a uint8 array, and
+# numpy promotes that to float64 -- 24 MiB for a 1024x1024x3 frame rather than
+# 12. The synchronous loader hides it, because it assigns into a preallocated
+# `torch.zeros(..., dtype=torch.float32)` and the cast happens implicitly.
+# `AsyncVideoFrameLoader` keeps what it is handed, so with async loading every
+# cached frame stays float64 for the life of the track.
+#
+# Measured on an 8 GB session: 1.57 GiB per concurrent track becomes 0.75 GiB,
+# and the session survives 6 concurrent tracks where it died at 4. Latency is
+# unchanged -- median 7.3s against 7.8s on 100-frame tracks -- because the
+# frames are already being downloaded to disk before this is reached.
+#
+# The real fix belongs upstream, in sam2/utils/misc.py: `.astype(np.float32)`
+# before the divide. Revisit this when that lands.
+LOAD_FRAMES_ASYNC = False
+
+
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
