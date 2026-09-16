@@ -28,6 +28,8 @@ import asyncio
 import functools
 import json
 import os
+import re
+import pathlib
 import threading
 import time
 import traceback
@@ -53,6 +55,7 @@ from supervisely._utils import rand_str
 from supervisely.app.content import get_data_dir
 from supervisely.app.widgets import Field, Switch
 from supervisely.imaging import image as sly_image
+from supervisely.video.sampling import stream_video_frames_to_dir
 from supervisely.imaging.color import generate_rgb
 from supervisely.io.fs import mkdir, remove_dir, silent_remove
 from supervisely.nn.inference.interactive_segmentation import functional
@@ -96,62 +99,76 @@ def get_plane_name(normal):
 
 
 def download_frames_to_paths(cache, api, video_id, frame_indexes, paths, progress_cb=None):
-    """Write video frames to paths, decoding the video rather than asking the
-    server for each frame.
+    """Write the frames a track needs, streamed and decoded from the video.
 
-    The server route is `videos.download-frame`, which extracts frames with
-    ffmpeg behind the CDN. It has two problems, and only one of them is about
-    availability:
+    Neither of the two things this replaces was right.
 
-    1. It is a per-frame round trip through `cdn-app/image-converter` for every
-       frame of every track. When that path is slow or down, tracking stops
-       entirely -- and it has been returning 504 for hours at a time.
-    2. It does not decode identically to the labeling tool. The server uses its
-       own frame map, so on some videos the frame the model tracks is not the
-       frame the labeler drew on, which is a wrong answer rather than a missing
-       one.
+    `videos.download-frame` is a round trip per frame through
+    `cdn-app/image-converter`, which extracts frames with ffmpeg server-side.
+    It is a single point of failure for all video tracking -- it has returned
+    504 for hours at a time, and when it does every serving app stops at once --
+    and it decodes with its own frame map, so on some videos the frame the model
+    tracks is not the frame the labeler drew on.
 
-    The SDK already has the alternative: `download_video` fetches the file once
-    and caches it, and `frames_loader` reads frames out of it with
-    `VideoFrameReader` -- decord where it is installed, OpenCV otherwise --
-    which is the same decode the labeling tool uses. One download replaces N
-    round trips, and the frames match what the labeler saw.
+    Caching the whole video was the other half: `run_cache_task_manually` with
+    no range downloads the entire file to serve a twenty-frame track, which for
+    a long video is most of a download nobody needed.
 
-    `frames_loader` falls back to per-frame downloads while the video is not yet
-    cached, so the download is done first and awaited. If it fails, the fallback
-    is what happens, which is the behaviour this replaces rather than a
-    regression.
+    `stream_video_frames_to_dir` does what is actually wanted: it demuxes the
+    video to build a PTS map, then decodes and yields only the requested range.
+    That is the decode path the labeling tool uses, so the frames match what the
+    labeler saw.
 
-    This also retires the workaround for supervisely/issues#6163: nothing here
-    looks a frame up by cache key any more, so neither the missing-write nor the
-    eviction route to that KeyError is reachable.
+    The custom writer exists because the two sides disagree about names. The SDK
+    writes `frame_<index:06d>.<ext>`; SAM2 lists the directory and sorts with
+    `int(splitext(name)[0])`, so it needs `0.jpg`, `1.jpg`, and so on in track
+    order. The writer maps one to the other rather than renaming afterwards,
+    which would be a second pass over every file.
     """
     indexes = list(frame_indexes)
-    try:
-        # Blocking, and a no-op when the video is already cached. return_images
-        # is False because the frames are streamed below; asking for the list
-        # would hold every decoded frame in memory at once.
-        cache.download_video(api, video_id, return_images=False)
-    except Exception:  # noqa: BLE001
-        sly.logger.warning(
-            "Could not cache video #%s; falling back to per-frame downloads.",
-            video_id,
-            exc_info=True,
-        )
+    if not indexes:
+        return
+    # Position in the track, which is what SAM2 indexes by. Backward tracks
+    # arrive descending, so this is not always the identity.
+    position_of = {frame_index: i for i, frame_index in enumerate(indexes)}
+    destination = str(pathlib.Path(paths[0]).parent)
+    written = set()
 
-    written = 0
-    for path, frame in zip(paths, cache.frames_loader(api, video_id, indexes)):
-        sly_image.write(path, frame)
-        written += 1
+    def _write(sdk_path, image):
+        # The SDK puts the real frame index in the name it chose; that is the
+        # only place it is available to a writer.
+        match = re.search(r"frame_(\d+)\.", os.path.basename(sdk_path))
+        if match is None:
+            return
+        frame_index = int(match.group(1))
+        position = position_of.get(frame_index)
+        if position is None:
+            # Outside the requested range. Streaming is inclusive at both ends,
+            # so this should not happen, and silently writing it would leave a
+            # file SAM2 would then try to track.
+            return
+        sly_image.write(os.path.join(destination, f"{position}.jpg"), image)
+        written.add(frame_index)
         if progress_cb is not None:
             progress_cb()
 
-    # A short read leaves the frame directory incomplete, and SAM2 would then
-    # index a file that is not there -- reported as something unrelated, several
-    # steps later. Fail here instead, where the cause is still visible.
-    if written != len(indexes):
+    stream_video_frames_to_dir(
+        api,
+        video_id,
+        destination,
+        start=min(indexes),
+        end=max(indexes),
+        ext="jpg",
+        image_writer=_write,
+    )
+
+    # A short read leaves the directory incomplete, and SAM2 would index a file
+    # that is not there -- reported as something unrelated, several steps later.
+    missing = [i for i in indexes if i not in written]
+    if missing:
         raise RuntimeError(
-            f"Expected {len(indexes)} frames for video {video_id} but wrote {written}"
+            f"Streamed {len(written)} of {len(indexes)} frames for video {video_id}; "
+            f"missing {missing[:5]}{'...' if len(missing) > 5 else ''}"
         )
 
 
@@ -739,19 +756,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         # start background task for caching frames
         api.logger.debug("Starting cache task for video %s", video_id, extra=log_extra)
-        if self.cache.is_persistent:
-            # if cache is persistent, run cache task for whole video
-            frame_range = None
-        else:
-            # if cache is not persistent, run cache task for range of frames
-            frame_range = [start_frame, end_frame]
-            if direction == -1:
-                frame_range = frame_range[::-1]
-        self.cache.run_cache_task_manually(
-            api,
-            frame_range,
-            video_id=video_id,
-        )
+        # No cache task: frames are streamed from the video below, so the whole
+        # file is no longer downloaded to serve a few frames of it.
 
         temp_frames_dir = f"frames/{rand_str(10)}"
         # save frames to directory
@@ -872,19 +878,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         # start background task for caching frames
         api.logger.debug("Starting cache task for video %s", video_id, extra=log_extra)
-        if self.cache.is_persistent:
-            # if cache is persistent, run cache task for whole video
-            frame_range = None
-        else:
-            # if cache is not persistent, run cache task for range of frames
-            frame_range = [start_frame, end_frame]
-            if direction == -1:
-                frame_range = frame_range[::-1]
-        self.cache.run_cache_task_manually(
-            api,
-            frame_range,
-            video_id=video_id,
-        )
+        # No cache task: frames are streamed from the video below, so the whole
+        # file is no longer downloaded to serve a few frames of it.
 
         # load figures
         api.logger.debug("Loading figures...", extra=log_extra)
@@ -1155,19 +1150,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             frame_index + frames_count * direction_n,
         ]
 
-        if self.cache.is_persistent:
-            self.cache.run_cache_task_manually(
-                api,
-                None,
-                video_id=video_id,
-            )
-        else:
-            # if cache is not persistent, run cache task for range of frames
-            self.cache.run_cache_task_manually(
-                api,
-                [range_of_frames if direction_n == 1 else range_of_frames[::-1]],
-                video_id=video_id,
-            )
+        # No cache task: frames are streamed from the video below, so the whole
+        # file is no longer downloaded to serve a few frames of it.
 
         global_stop_indicatior = False
 
