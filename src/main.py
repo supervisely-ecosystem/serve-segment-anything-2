@@ -649,93 +649,99 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         )
 
         temp_frames_dir = f"frames/{rand_str(10)}"
-        # save frames to directory
-        api.logger.debug("Saving frames to directory...", extra=log_extra)
-        mkdir(temp_frames_dir, remove_content_if_exists=True)
-        self.cache.download_frames_to_paths(
-            api,
-            video_id,
-            frames_indexes,
-            [f"{temp_frames_dir}/{i}.jpg" for i in range(n_frames + 1)],
-        )
-
-        # initialize model
-        if not self.video_predictor:
-            self.video_predictor = build_sam2_video_predictor(
-                self.config, self.weights_path
+        inference_state = None
+        try:
+            # save frames to directory
+            api.logger.debug("Saving frames to directory...", extra=log_extra)
+            mkdir(temp_frames_dir, remove_content_if_exists=True)
+            self.cache.download_frames_to_paths(
+                api,
+                video_id,
+                frames_indexes,
+                [f"{temp_frames_dir}/{i}.jpg" for i in range(n_frames + 1)],
             )
 
-        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-            inference_state = self.video_predictor.init_state(
-                video_path=temp_frames_dir,
-                offload_video_to_cpu=True,
-                offload_state_to_cpu=True,
-                async_loading_frames=True,
-            )
-
-        for i, input_geom_data in enumerate(input_geometries):
-            geometry = self._deserialize_geometry(input_geom_data)
-            if not isinstance(geometry, sly.Bitmap) and not isinstance(
-                geometry, sly.Polygon
-            ):
-                raise TypeError(
-                    f"This app does not support {geometry.geometry_name()} tracking"
+            # initialize model
+            if not self.video_predictor:
+                self.video_predictor = build_sam2_video_predictor(
+                    self.config, self.weights_path
                 )
-            # convert polygon to bitmap
-            if isinstance(geometry, sly.Polygon):
-                polygon_obj_class = sly.ObjClass("polygon", sly.Polygon)
-                polygon_label = sly.Label(geometry, polygon_obj_class)
-                bitmap_obj_class = sly.ObjClass("bitmap", sly.Bitmap)
-                bitmap_label = polygon_label.convert(bitmap_obj_class)[0]
-                geometry = bitmap_label.geometry
 
-            first_frame = sly_image.read(f"{temp_frames_dir}/0.jpg")
-            prompt = self.generate_artificial_prompt(geometry, first_frame)
-            smarttool_input = (prompt["bbox"], prompt["point_coordinates"], [], True)
-
-            # bbox - ltrb
-            # points - col, row
-            bbox, positive_clicks, negative_clicks, _ = smarttool_input
-            if not self.use_bbox.is_switched():
-                bbox = None
             with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                self.video_predictor.add_new_points_or_box(
-                    inference_state=inference_state,
-                    frame_idx=0,
-                    obj_id=i,
-                    points=positive_clicks + negative_clicks,
-                    labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
-                    box=bbox,
+                inference_state = self.video_predictor.init_state(
+                    video_path=temp_frames_dir,
+                    offload_video_to_cpu=True,
+                    offload_state_to_cpu=True,
+                    async_loading_frames=True,
                 )
 
-        results = []
-        # run propagation throughout the video
-        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-            for (
-                out_frame_idx,
-                _,
-                out_mask_logits,
-            ) in self.video_predictor.propagate_in_video(inference_state):
-                # skip first frame prediction
-                if out_frame_idx == 0:
-                    continue
-                results.append([])
-                for masks in out_mask_logits:
-                    masks = (masks > 0.0).cpu().numpy()
-                    sum_mask = np.any(masks, axis=0)
-                    if np.all(~sum_mask):
-                        logger.debug(
-                            "Empty mask detected",
-                            extra={**log_extra, "out_frame_idx": out_frame_idx},
-                        )
-                        continue
-                    geometry = sly.Bitmap(sum_mask, extra_validation=False)
-                    results[-1].append(
-                        {"type": geometry.geometry_name(), "data": geometry.to_json()}
+            for i, input_geom_data in enumerate(input_geometries):
+                geometry = self._deserialize_geometry(input_geom_data)
+                if not isinstance(geometry, sly.Bitmap) and not isinstance(
+                    geometry, sly.Polygon
+                ):
+                    raise TypeError(
+                        f"This app does not support {geometry.geometry_name()} tracking"
+                    )
+                # convert polygon to bitmap
+                if isinstance(geometry, sly.Polygon):
+                    polygon_obj_class = sly.ObjClass("polygon", sly.Polygon)
+                    polygon_label = sly.Label(geometry, polygon_obj_class)
+                    bitmap_obj_class = sly.ObjClass("bitmap", sly.Bitmap)
+                    bitmap_label = polygon_label.convert(bitmap_obj_class)[0]
+                    geometry = bitmap_label.geometry
+
+                first_frame = sly_image.read(f"{temp_frames_dir}/0.jpg")
+                prompt = self.generate_artificial_prompt(geometry, first_frame)
+                smarttool_input = (prompt["bbox"], prompt["point_coordinates"], [], True)
+
+                # bbox - ltrb
+                # points - col, row
+                bbox, positive_clicks, negative_clicks, _ = smarttool_input
+                if not self.use_bbox.is_switched():
+                    bbox = None
+                with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    self.video_predictor.add_new_points_or_box(
+                        inference_state=inference_state,
+                        frame_idx=0,
+                        obj_id=i,
+                        points=positive_clicks + negative_clicks,
+                        labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
+                        box=bbox,
                     )
 
-        self.video_predictor.reset_state(inference_state)
-        return results
+            results = []
+            # run propagation throughout the video
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                for (
+                    out_frame_idx,
+                    _,
+                    out_mask_logits,
+                ) in self.video_predictor.propagate_in_video(inference_state):
+                    # skip first frame prediction
+                    if out_frame_idx == 0:
+                        continue
+                    results.append([])
+                    for masks in out_mask_logits:
+                        masks = (masks > 0.0).cpu().numpy()
+                        sum_mask = np.any(masks, axis=0)
+                        if np.all(~sum_mask):
+                            logger.debug(
+                                "Empty mask detected",
+                                extra={**log_extra, "out_frame_idx": out_frame_idx},
+                            )
+                            continue
+                        geometry = sly.Bitmap(sum_mask, extra_validation=False)
+                        results[-1].append(
+                            {"type": geometry.geometry_name(), "data": geometry.to_json()}
+                        )
+
+            return results
+        finally:
+            if self.video_predictor is not None and inference_state is not None:
+                # reset predictor state
+                self.video_predictor.reset_state(inference_state)
+            remove_dir(temp_frames_dir)
 
     def _track(
         self,
