@@ -7,6 +7,8 @@ import time
 import traceback
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+import ctypes
+import gc
 import itertools
 from queue import Queue, Empty
 from typing import Any, Dict, List, Literal
@@ -223,6 +225,86 @@ def _instrumented(kind):
         return wrapper
 
     return decorate
+
+
+def object_census():
+    """What is actually alive, by type and by bytes."""
+    counts = {}
+    torch_cpu_bytes = 0
+    torch_cpu_count = 0
+    torch_gpu_bytes = 0
+    numpy_bytes = 0
+    numpy_count = 0
+    biggest = []
+
+    gc.collect()
+    for obj in gc.get_objects():
+        try:
+            if isinstance(obj, torch.Tensor):
+                nbytes = obj.element_size() * obj.nelement()
+                if obj.device.type == "cpu":
+                    torch_cpu_bytes += nbytes
+                    torch_cpu_count += 1
+                    if nbytes > 16 * 1024 * 1024:
+                        biggest.append(("torch_cpu", nbytes, tuple(obj.shape), str(obj.dtype)))
+                else:
+                    torch_gpu_bytes += nbytes
+            elif isinstance(obj, np.ndarray):
+                numpy_bytes += obj.nbytes
+                numpy_count += 1
+                if obj.nbytes > 16 * 1024 * 1024:
+                    biggest.append(("numpy", obj.nbytes, tuple(obj.shape), str(obj.dtype)))
+            else:
+                name = type(obj).__name__
+                counts[name] = counts.get(name, 0) + 1
+        except Exception:  # noqa: BLE001
+            continue
+
+    biggest.sort(key=lambda item: item[1], reverse=True)
+    return {
+        "torch_cpu_bytes": torch_cpu_bytes,
+        "torch_cpu_tensors": torch_cpu_count,
+        "torch_gpu_bytes": torch_gpu_bytes,
+        "numpy_bytes": numpy_bytes,
+        "numpy_arrays": numpy_count,
+        "live_bytes_total": torch_cpu_bytes + numpy_bytes,
+        "largest": [
+            {"kind": k, "bytes": b, "shape": list(s), "dtype": d}
+            for k, b, s, d in biggest[:12]
+        ],
+        "top_types": sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:12],
+        "gc_counts": gc.get_count(),
+    }
+
+
+def malloc_trim_probe():
+    """Hand free memory back to the OS and see how much there was.
+
+    A large drop proves the process was holding memory it had already finished
+    with -- reusable by the next track, not leaked -- which means the binding
+    constraint is peak concurrent demand rather than accumulation.
+    """
+    before = _proc_status_kb("VmRSS:")
+    trimmed = None
+    error = None
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        gc.collect()
+        try:
+            torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
+        trimmed = libc.malloc_trim(0)
+    except Exception as failure:  # noqa: BLE001
+        error = str(failure)[:160]
+    after = _proc_status_kb("VmRSS:")
+    return {
+        "rss_before": before,
+        "rss_after": after,
+        "released_bytes": None if (before is None or after is None) else before - after,
+        "malloc_trim_returned": trimmed,
+        "error": error,
+    }
 
 
 def memory_probe(app_instance=None):
@@ -1906,6 +1988,14 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     "error": None,
                 }
             return response
+
+        @server.post("/mem-census")
+        def mem_census():
+            return object_census()
+
+        @server.post("/mem-trim")
+        def mem_trim():
+            return malloc_trim_probe()
 
         @server.post("/mem-probe")
         def mem_probe():
