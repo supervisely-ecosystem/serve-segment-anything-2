@@ -32,7 +32,6 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
 from typing import Any, Dict, List, Literal
 import uuid
@@ -97,63 +96,63 @@ def get_plane_name(normal):
 
 
 def download_frames_to_paths(cache, api, video_id, frame_indexes, paths, progress_cb=None):
-    """Write video frames to paths, without the SDK's lookup-by-key.
+    """Write video frames to paths, decoding the video rather than asking the
+    server for each frame.
 
-    A workaround for supervisely/issues#6163, not a preference.
-    `InferenceImageCache.download_frames_to_paths()` stores each frame and then
-    reads it back out of the cache by key, and `download_frame()` has a path --
-    taken whenever the whole video is already cached as a file -- that returns
-    the frame without storing it at all. The two disagree, and the read raises
-    `KeyError('frame_<video_id>_<n>')`, failing the whole track.
+    The server route is `videos.download-frame`, which extracts frames with
+    ffmpeg behind the CDN. It has two problems, and only one of them is about
+    availability:
 
-    The apps make that likely rather than rare: `run_cache_task_manually()`
-    caches the video in a background thread immediately before this is called,
-    so the video routinely arrives between the caller's check and the cache's.
+    1. It is a per-frame round trip through `cdn-app/image-converter` for every
+       frame of every track. When that path is slow or down, tracking stops
+       entirely -- and it has been returning 504 for hours at a time.
+    2. It does not decode identically to the labeling tool. The server uses its
+       own frame map, so on some videos the frame the model tracks is not the
+       frame the labeler drew on, which is a wrong answer rather than a missing
+       one.
 
-    `download_frame()` itself returns the right frame on every one of its
-    paths. Taking what it returns and writing it here sidesteps the defect
-    without touching the SDK, and is immune to the second route to the same
-    error -- eviction between the store and the read, which SMART_CACHE_SIZE
-    (default 256 frames) makes reachable with two concurrent tracks.
+    The SDK already has the alternative: `download_video` fetches the file once
+    and caches it, and `frames_loader` reads frames out of it with
+    `VideoFrameReader` -- decord where it is installed, OpenCV otherwise --
+    which is the same decode the labeling tool uses. One download replaces N
+    round trips, and the frames match what the labeler saw.
 
-    Remove this and call the SDK again once #6163 has shipped and the
-    supervisely pin in this repository has moved past it.
+    `frames_loader` falls back to per-frame downloads while the video is not yet
+    cached, so the download is done first and awaited. If it fails, the fallback
+    is what happens, which is the behaviour this replaces rather than a
+    regression.
+
+    This also retires the workaround for supervisely/issues#6163: nothing here
+    looks a frame up by cache key any more, so neither the missing-write nor the
+    eviction route to that KeyError is reachable.
     """
-    # Five at a time, matching what the SDK did, so the load this puts on the
-    # instance is unchanged.
-    def _fetch(index_and_path):
-        frame_index, path = index_and_path
-        frame = cache.download_frame(api, video_id, frame_index)
+    indexes = list(frame_indexes)
+    try:
+        # Blocking, and a no-op when the video is already cached. return_images
+        # is False because the frames are streamed below; asking for the list
+        # would hold every decoded frame in memory at once.
+        cache.download_video(api, video_id, return_images=False)
+    except Exception:  # noqa: BLE001
+        sly.logger.warning(
+            "Could not cache video #%s; falling back to per-frame downloads.",
+            video_id,
+            exc_info=True,
+        )
+
+    written = 0
+    for path, frame in zip(paths, cache.frames_loader(api, video_id, indexes)):
         sly_image.write(path, frame)
+        written += 1
         if progress_cb is not None:
             progress_cb()
 
-    pairs = list(zip(frame_indexes, paths))
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        # list() rather than leaving the iterator lazy: map() swallows
-        # exceptions until the results are consumed, and a frame that failed to
-        # download must fail the track rather than leave a missing file for the
-        # model to trip over later.
-        list(pool.map(_fetch, pairs))
-
-
-# Load a track's frames synchronously, which costs half the memory.
-#
-# SAM2's `_load_img_as_tensor` does `img_np / 255.0` on a uint8 array, and
-# numpy promotes that to float64 -- 24 MiB for a 1024x1024x3 frame rather than
-# 12. The synchronous loader hides it, because it assigns into a preallocated
-# `torch.zeros(..., dtype=torch.float32)` and the cast happens implicitly.
-# `AsyncVideoFrameLoader` keeps what it is handed, so with async loading every
-# cached frame stays float64 for the life of the track.
-#
-# Measured on an 8 GB session: 1.57 GiB per concurrent track becomes 0.75 GiB,
-# and the session survives 6 concurrent tracks where it died at 4. Latency is
-# unchanged -- median 7.3s against 7.8s on 100-frame tracks -- because the
-# frames are already being downloaded to disk before this is reached.
-#
-# The real fix belongs upstream, in sam2/utils/misc.py: `.astype(np.float32)`
-# before the divide. Revisit this when that lands.
-LOAD_FRAMES_ASYNC = False
+    # A short read leaves the frame directory incomplete, and SAM2 would then
+    # index a file that is not there -- reported as something unrelated, several
+    # steps later. Fail here instead, where the cause is still visible.
+    if written != len(indexes):
+        raise RuntimeError(
+            f"Expected {len(indexes)} frames for video {video_id} but wrote {written}"
+        )
 
 
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
