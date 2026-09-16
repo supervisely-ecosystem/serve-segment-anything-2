@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 import ctypes
 import gc
 import itertools
+import re
+import tempfile
 from queue import Queue, Empty
 from typing import Any, Dict, List, Literal
 import uuid
@@ -225,6 +227,73 @@ def _instrumented(kind):
         return wrapper
 
     return decorate
+
+
+class _MallInfo2(ctypes.Structure):
+    """glibc struct mallinfo2. All size_t, unlike the old int-based mallinfo."""
+
+    _fields_ = [
+        ("arena", ctypes.c_size_t),      # non-mmapped space from the system
+        ("ordblks", ctypes.c_size_t),
+        ("smblks", ctypes.c_size_t),
+        ("hblks", ctypes.c_size_t),      # mmapped regions
+        ("hblkhd", ctypes.c_size_t),     # space in those mmapped regions
+        ("usmblks", ctypes.c_size_t),
+        ("fsmblks", ctypes.c_size_t),
+        ("uordblks", ctypes.c_size_t),   # in use
+        ("fordblks", ctypes.c_size_t),   # free but retained
+        ("keepcost", ctypes.c_size_t),   # releasable from the main arena top
+    ]
+
+
+def allocator_report():
+    report = {"threads": threading.active_count()}
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+    except Exception as failure:  # noqa: BLE001
+        return {"error": str(failure)[:160]}
+
+    try:
+        libc.mallinfo2.restype = _MallInfo2
+        info = libc.mallinfo2()
+        report["mallinfo2"] = {
+            "arena": info.arena,
+            "mmapped": info.hblkhd,
+            "mmap_regions": info.hblks,
+            "in_use": info.uordblks,
+            "free_retained": info.fordblks,
+            "releasable_top": info.keepcost,
+        }
+    except Exception as failure:  # noqa: BLE001
+        report["mallinfo2_error"] = str(failure)[:160]
+
+    # Per-arena detail. malloc_info writes XML to a stream; a temp file is the
+    # simplest way to get it back without fighting FILE* from ctypes.
+    try:
+        handle, temp_path = tempfile.mkstemp(suffix=".xml")
+        os.close(handle)
+        fopen = libc.fopen
+        fopen.restype = ctypes.c_void_p
+        fopen.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        stream = fopen(temp_path.encode(), b"w")
+        libc.malloc_info(ctypes.c_int(0), ctypes.c_void_p(stream))
+        libc.fclose(ctypes.c_void_p(stream))
+        with open(temp_path) as xml_file:
+            xml = xml_file.read()
+        os.unlink(temp_path)
+
+        heaps = re.findall(r'<heap nr="(\d+)">', xml)
+        totals = dict(re.findall(r'<total type="([a-z]+)" count="\d+" size="(\d+)"/>', xml))
+        systems = re.findall(r'<system type="(current|max)" size="(\d+)"/>', xml)
+        report["malloc_info"] = {
+            "arenas": len(heaps),
+            "totals": {key: int(value) for key, value in totals.items()},
+            "system": {key: int(value) for key, value in systems[-2:]},
+        }
+    except Exception as failure:  # noqa: BLE001
+        report["malloc_info_error"] = str(failure)[:160]
+
+    return report
 
 
 def object_census():
@@ -1988,6 +2057,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     "error": None,
                 }
             return response
+
+        @server.post("/mem-arena")
+        def mem_arena():
+            return allocator_report()
 
         @server.post("/mem-census")
         def mem_census():
