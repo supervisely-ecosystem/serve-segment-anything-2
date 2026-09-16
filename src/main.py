@@ -5,6 +5,7 @@ import os
 import threading
 import time
 import traceback
+from contextlib import contextmanager
 from pathlib import Path
 from queue import Queue, Empty
 from typing import Any, Dict, List, Literal
@@ -67,6 +68,187 @@ def get_plane_name(normal):
         return Plane.AXIAL
     else:
         return "Unknown"
+
+
+# What a tracked frame costs in host RAM, and why a shared session dies without
+# a bound on the total.
+#
+# SAM2 loads a request's frames as a float32 1024x1024x3 tensor --
+# `torch.zeros(num_frames, 3, image_size, image_size)` in sam2/utils/misc.py --
+# and `init_state(offload_video_to_cpu=True)` keeps them in host RAM rather
+# than VRAM. 12 MiB per frame, held for as long as the track runs.
+#
+# Nothing bounded the *sum* across concurrent tracks, and that is what kills
+# the session. Measured on the containers that died, from their own logs:
+#
+#   7 tracks holding 540 frames = 6.33 GiB  -> OOMKilled
+#   5 tracks holding 460 frames = 5.39 GiB  -> OOMKilled
+#   5 tracks holding 238 frames = 2.79 GiB  -> survived
+#
+# The survivor ran the same number of tracks as one of the dead. So the bound
+# belongs on frames in flight -- not on one request's size, and not on a count
+# of tracks, because neither predicts which of those three dies.
+FRAME_TENSOR_BYTES = 3 * 1024 * 1024 * 4  # float32 CHW at SAM2's image_size
+
+# 0.35 rather than a rounder number because the container that survived held
+# 2.79 GiB of an 8 GB limit. The rest goes to the weights, the CUDA host
+# allocations, the offloaded inference state and the JPEGs on their way in --
+# none of which this counts, which is exactly why it does not take all of it.
+FRAME_BUDGET_SHARE = 0.35
+
+# When no cgroup limit is readable, which is every run outside a container.
+DEFAULT_FRAME_BUDGET = 256
+
+# Never bound below this, or a small session refuses ordinary work.
+MIN_FRAME_BUDGET = 32
+
+# How long a track waits for room. Long, because waiting is the point: the
+# caller gets its turn instead of the session dying and destroying everyone
+# else's. Finite, so a wedged budget surfaces as errors rather than as requests
+# that never return.
+FRAME_WAIT_TIMEOUT_S = 300
+
+
+def _container_memory_limit():
+    """The container's memory limit in bytes, or None when it is unlimited."""
+    for source in (
+        "/sys/fs/cgroup/memory.max",  # cgroup v2
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",  # cgroup v1
+    ):
+        try:
+            with open(source) as limit_file:
+                raw = limit_file.read().strip()
+        except OSError:
+            continue
+        if raw == "max":
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        # cgroup v1 reports a sentinel near 2**63 instead of "max".
+        if value <= 0 or value >= 1 << 62:
+            return None
+        return value
+    return None
+
+
+def track_frame_budget():
+    """Frames all in-flight tracks may hold between them."""
+    override = os.environ.get("SLY_TRACK_FRAME_BUDGET", "").strip()
+    if override:
+        try:
+            return max(1, int(override))
+        except ValueError:
+            sly.logger.warning(
+                "Ignoring non-numeric SLY_TRACK_FRAME_BUDGET=%r", override
+            )
+
+    limit = _container_memory_limit()
+    if limit is None:
+        return DEFAULT_FRAME_BUDGET
+    affordable = int(limit * FRAME_BUDGET_SHARE) // FRAME_TENSOR_BYTES
+    return max(MIN_FRAME_BUDGET, affordable)
+
+
+class _FrameBudget:
+    """Admits a track once the frames it will hold fit alongside the rest.
+
+    Waiting rather than refusing: the caller that waits gets its turn, where
+    the caller that is refused retries -- and retries are what turned a busy
+    session into a dead one. Three of the four users in the incident sample
+    re-sent an identical request within seconds, so each retry was holding its
+    track's memory twice.
+    """
+
+    def __init__(self):
+        self._cv = threading.Condition()
+        self._in_flight = 0
+
+    @property
+    def in_flight(self):
+        with self._cv:
+            return self._in_flight
+
+    @contextmanager
+    def hold(self, frames, log_extra=None):
+        budget = track_frame_budget()
+        # A request bigger than the whole budget still has to run, or it would
+        # wait for room that can never exist. It runs on its own instead.
+        need = min(frames, budget)
+        extra = dict(log_extra or {})
+        waited = 0.0
+
+        with self._cv:
+            if self._in_flight + need > budget:
+                sly.logger.info(
+                    "Tracking is at capacity, waiting for room",
+                    extra={
+                        **extra,
+                        "frames_requested": frames,
+                        "frames_in_flight": self._in_flight,
+                        "frame_budget": budget,
+                    },
+                )
+                started = time.monotonic()
+                admitted = self._cv.wait_for(
+                    lambda: self._in_flight + need <= budget,
+                    timeout=FRAME_WAIT_TIMEOUT_S,
+                )
+                if not admitted:
+                    raise RuntimeError(
+                        f"Timed out after {FRAME_WAIT_TIMEOUT_S}s waiting to track "
+                        f"{frames} frames: {self._in_flight} frames already in "
+                        f"flight against a budget of {budget}. The session is "
+                        "busy -- retry, or give it more memory."
+                    )
+                waited = time.monotonic() - started
+            self._in_flight += frames
+
+        if waited:
+            sly.logger.info(
+                "Admitted after waiting %.1fs for tracking memory", waited, extra=extra
+            )
+        try:
+            yield
+        finally:
+            with self._cv:
+                self._in_flight -= frames
+                # Every waiter, because the one that fits may not be the one
+                # that has waited longest.
+                self._cv.notify_all()
+
+
+FRAME_BUDGET = _FrameBudget()
+
+# Said out loud at startup. Anyone looking at an OOM-killed session needs to
+# know what it thought its budget was, and this is the only place that shows
+# whether the container's limit was read or the default quietly applied.
+_STARTUP_BUDGET = track_frame_budget()
+sly.logger.info(
+    "Tracking frame budget: %d frames (~%.2f GiB at %d MiB per frame)",
+    _STARTUP_BUDGET,
+    _STARTUP_BUDGET * FRAME_TENSOR_BYTES / (1024 ** 3),
+    FRAME_TENSOR_BYTES // (1024 * 1024),
+)
+
+
+def _bounded_by_frame_budget(method):
+    """Hold a track's frames against the session budget for its whole run.
+
+    Applied to the methods rather than the routes so that every caller is
+    covered -- `_track_async` runs in an executor, where wrapping the route
+    would reserve on the wrong thread and release before the work began.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, api, context, *args, **kwargs):
+        # +1 because the tracking paths load an inclusive range of frames.
+        frames = int(context.get("frames", 0)) + 1
+        with FRAME_BUDGET.hold(frames, {"frames": frames}):
+            return method(self, api, context, *args, **kwargs)
+
+    return wrapper
 
 
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
@@ -612,6 +794,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         visible = smarttool_input["visible"]
         return crop, positive, negative, visible
 
+    @_bounded_by_frame_budget
     @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
     @mock.patch("sam2.utils.misc.tqdm", notqdm)
     def _track_api(self, api: sly.Api, context: dict):
@@ -737,6 +920,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         self.video_predictor.reset_state(inference_state)
         return results
 
+    @_bounded_by_frame_budget
     def _track(
         self,
         api: sly.Api,
@@ -1013,6 +1197,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 notify_thread.join()
             remove_dir(temp_frames_dir)
 
+    @_bounded_by_frame_budget
     @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
     @mock.patch("sam2.utils.misc.tqdm", notqdm)
     def _track_async(self, api: sly.Api, context: dict, request_uuid: str = None):
