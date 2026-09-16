@@ -1,3 +1,29 @@
+# Cap glibc's arena count before anything in this process starts a thread.
+#
+# glibc gives each contending thread its own arena, up to 8 x ncores, and
+# memory freed in one arena cannot satisfy an allocation in another. This app
+# runs a download pool and a frame-loading thread, and `nproc` inside the
+# container reports the node's CPUs -- 12 and 32 on the production nodes --
+# rather than the container's limit of 2, so it is entitled to 96 or 256
+# arenas.
+#
+# Measured over 26 sequential tracks on an 8 GB session: memory actually in
+# use stayed flat at 0.87 GiB while RSS climbed 1.35 -> 4.92 GiB, all of it
+# free-but-retained across 156 arenas. Nothing leaked; the allocator simply
+# never gave it back, and the session grew more fragile the longer it lived.
+# With the cap: 1.33 -> 2.12 GiB, free-but-retained flat at 0.22 GiB, doing
+# the same work.
+#
+# -8 is M_ARENA_MAX. Done here rather than as an environment variable so it
+# travels with the app instead of depending on how a session was launched.
+import ctypes as _ctypes
+
+try:
+    _ctypes.CDLL("libc.so.6").mallopt(-8, 2)
+except Exception:  # noqa: BLE001
+    # Not glibc, or no libc to load. Nothing here is worth failing a start for.
+    pass
+
 import asyncio
 import functools
 import json
@@ -97,6 +123,25 @@ def download_frames_to_paths(cache, api, video_id, frame_indexes, paths, progres
         # download must fail the track rather than leave a missing file for the
         # model to trip over later.
         list(pool.map(_fetch, pairs))
+
+
+# Load a track's frames synchronously, which costs half the memory.
+#
+# SAM2's `_load_img_as_tensor` does `img_np / 255.0` on a uint8 array, and
+# numpy promotes that to float64 -- 24 MiB for a 1024x1024x3 frame rather than
+# 12. The synchronous loader hides it, because it assigns into a preallocated
+# `torch.zeros(..., dtype=torch.float32)` and the cast happens implicitly.
+# `AsyncVideoFrameLoader` keeps what it is handed, so with async loading every
+# cached frame stays float64 for the life of the track.
+#
+# Measured on an 8 GB session: 1.57 GiB per concurrent track becomes 0.75 GiB,
+# and the session survives 6 concurrent tracks where it died at 4. Latency is
+# unchanged -- median 7.3s against 7.8s on 100-frame tracks -- because the
+# frames are already being downloaded to disk before this is reached.
+#
+# The real fix belongs upstream, in sam2/utils/misc.py: `.astype(np.float32)`
+# before the divide. Revisit this when that lands.
+LOAD_FRAMES_ASYNC = False
 
 
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
@@ -701,7 +746,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 video_path=temp_frames_dir,
                 offload_video_to_cpu=True,
                 offload_state_to_cpu=True,
-                async_loading_frames=True,
+                async_loading_frames=LOAD_FRAMES_ASYNC,
             )
 
         for i, input_geom_data in enumerate(input_geometries):
@@ -887,7 +932,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     video_path=temp_frames_dir,
                     offload_video_to_cpu=True,
                     offload_state_to_cpu=True,
-                    async_loading_frames=True,
+                    async_loading_frames=LOAD_FRAMES_ASYNC,
                 )
 
             for figure in figures:
@@ -1319,7 +1364,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     video_path=temp_frames_dir,
                     offload_video_to_cpu=True,
                     offload_state_to_cpu=True,
-                    async_loading_frames=True,
+                    async_loading_frames=LOAD_FRAMES_ASYNC,
                 )
 
             for figure in figures:
