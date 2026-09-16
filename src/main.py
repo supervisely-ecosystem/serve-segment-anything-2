@@ -69,6 +69,94 @@ def get_plane_name(normal):
         return "Unknown"
 
 
+# How many frames one tracking request may hold in memory at once.
+#
+# SAM2 loads every frame of a request as a float32 1024x1024x3 tensor --
+# `torch.zeros(num_frames, 3, image_size, image_size)` in sam2/utils/misc.py --
+# and `init_state(offload_video_to_cpu=True)` keeps them in host RAM rather
+# than VRAM. That is 12 MiB per frame, and the frame count arrives in the
+# request body with nothing checking it, so one long enough track fills the
+# container on its own and the pod is OOM-killed. On a shared session that
+# takes everybody else's work with it.
+#
+# Refused rather than truncated: returning fewer frames than were asked for
+# looks like a tracking failure to the caller and is much harder to diagnose
+# than being told the limit. This file already refuses an oversized request
+# this way for `batch_size`.
+FRAME_TENSOR_BYTES = 3 * 1024 * 1024 * 4  # float32 CHW at SAM2's image_size
+
+# Used when no limit can be read, which is every run outside a container.
+DEFAULT_MAX_TRACK_FRAMES = 256
+
+# A cap below this would refuse ordinary work, so a very small container is
+# left to try and fail rather than be made useless.
+MIN_MAX_TRACK_FRAMES = 32
+
+# Half the container. The weights, the CUDA host allocations and the decoded
+# JPEGs on their way in all share the limit with the frame buffer.
+FRAME_MEMORY_SHARE = 0.5
+
+
+def _container_memory_limit():
+    """The container's memory limit in bytes, or None when it is unlimited."""
+    for source in (
+        "/sys/fs/cgroup/memory.max",  # cgroup v2
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",  # cgroup v1
+    ):
+        try:
+            with open(source) as limit_file:
+                raw = limit_file.read().strip()
+        except OSError:
+            continue
+        if raw == "max":
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        # cgroup v1 reports a sentinel near 2**63 instead of "max".
+        if value <= 0 or value >= 1 << 62:
+            return None
+        return value
+    return None
+
+
+def max_track_frames():
+    """Frames one request may ask for, from the memory they would occupy."""
+    override = os.environ.get("SLY_MAX_TRACK_FRAMES", "").strip()
+    if override:
+        try:
+            return max(1, int(override))
+        except ValueError:
+            sly.logger.warning(
+                "Ignoring non-numeric SLY_MAX_TRACK_FRAMES=%r", override
+            )
+
+    limit = _container_memory_limit()
+    if limit is None:
+        return DEFAULT_MAX_TRACK_FRAMES
+    affordable = int(limit * FRAME_MEMORY_SHARE) // FRAME_TENSOR_BYTES
+    return max(MIN_MAX_TRACK_FRAMES, affordable)
+
+
+def check_track_frames(n_frames):
+    """Refuse a request whose frames would not fit in memory.
+
+    `n_frames` is the count from the request; the tracking paths load one more
+    than that, because the range includes the frame it starts from.
+    """
+    requested = n_frames + 1
+    allowed = max_track_frames()
+    if requested <= allowed:
+        return
+    raise ValueError(
+        f"Cannot track {requested} frames in one request: this session holds "
+        f"at most {allowed} ({FRAME_TENSOR_BYTES // (1024 * 1024)} MiB each). "
+        "Track a shorter range, or give the session more memory and raise "
+        "SLY_MAX_TRACK_FRAMES."
+    )
+
+
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -620,6 +708,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         video_id = context["videoId"]
         start_frame = context["frameIndex"]
         n_frames = context["frames"]
+        check_track_frames(n_frames)
         input_geometries = context["input_geometries"]
         direction = 1 if context.get("direction", "forward") == "forward" else -1
         log_extra = {
@@ -746,6 +835,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         video_id = context["videoId"]
         track_id = context["trackId"]
         n_frames = context["frames"]
+        check_track_frames(n_frames)
         start_frame = context["frameIndex"]
         figure_ids = context["figureIds"]
         direction = 1 if context.get("direction", "forward") == "forward" else -1
@@ -1023,6 +1113,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         streaming_request = context.get("streamingRequest", False)
         frame_index = context["frameIndex"]
         frames_count = context["frames"]
+        check_track_frames(frames_count)
         track_id = context["trackId"]
         video_id = context["videoId"]
         direction = context.get("direction", "forward")
