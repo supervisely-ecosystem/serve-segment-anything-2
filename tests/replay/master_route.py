@@ -11,8 +11,8 @@ head scenarios use. The route body itself is never retyped or modified.
 import ast
 import subprocess
 
-#: Baseline commit reproduced by ``baseline_direct_mask.py`` (``master``).
-BASELINE_SHA = "963a36d22087b60eefc9451c3e8a396049f53cd8"
+#: Baseline commit reproduced by ``baseline_direct_mask.py`` (``master`` head).
+BASELINE_SHA = "ace8b6813f0caa877f39c086137d8a0969748e22"
 
 ROUTE_PATH = "/smart_segmentation"
 
