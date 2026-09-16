@@ -21,9 +21,11 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-#: Baseline commit reproduced by ``baseline_direct_mask.py``: the ``master``
-#: head this branch is merged up to, and an ancestor of the current head, so
-#: the reproduction reads real history instead of a claimed commit.
+#: Baseline commit reproduced by ``baseline_direct_mask.py``: this branch's
+#: merge base with ``master``, an ancestor of the current head, so the
+#: reproduction reads real history. Its route body is unchanged at current
+#: ``master`` head ``b1116682802c11a66c408837569937b68e7979d6``; the loader
+#: re-checks that at runtime against ``VERIFY_BASE_SHA``.
 BASELINE_SHA = "14266f61aa5e3c118889f3802dfa7e47255c257f"
 
 ROUTE_PATH = "/smart_segmentation"
@@ -51,6 +53,16 @@ def _decorated_route(module):
     raise AssertionError(f"No {ROUTE_PATH} route found in the baseline source")
 
 
+def _route_source_at(sha):
+    """Returns the route source of ``sha:src/main.py``, or ``None`` and a reason."""
+    show = _git("show", f"{sha}:src/main.py")
+    if show.returncode != 0:
+        return None, (show.stderr or "commit unavailable").strip()
+    node = _decorated_route(ast.parse(show.stdout))
+    source = textwrap.dedent(ast.get_source_segment(show.stdout, node, padded=True))
+    return source.rstrip() + "\n", None
+
+
 def baseline_route_source(sha=BASELINE_SHA):
     """Returns ``(source, verified_against_git)`` for the baseline route."""
     fixture = FIXTURE_PATH.read_text()
@@ -59,18 +71,28 @@ def baseline_route_source(sha=BASELINE_SHA):
 
     verify_base = os.environ.get("VERIFY_BASE_SHA")
     if verify_base and not sha.startswith(verify_base):
-        print(f"note: runtime VERIFY_BASE_SHA={verify_base}, reproducing pinned {sha}")
+        # The reproduced commit is this branch's merge base. Report whether the
+        # runtime's base commit still carries the very same route, so the
+        # reproduction can never quietly describe an outdated baseline.
+        base_source, reason = _route_source_at(verify_base)
+        if base_source is None:
+            state = f"not readable here ({reason})"
+        elif base_source == fixture:
+            state = "byte-identical to the reproduced route"
+        else:
+            state = "DIFFERENT from the reproduced route"
+        print(
+            f"note: runtime base {verify_base} {ROUTE_PATH} route is {state}; "
+            f"reproducing pinned {sha}"
+        )
 
     ancestry = _git("merge-base", "--is-ancestor", sha, "HEAD")
-    show = _git("show", f"{sha}:src/main.py")
-    if ancestry.returncode != 0 or show.returncode != 0:
-        reason = (ancestry.stderr or show.stderr or "commit unavailable").strip()
+    extracted, reason = _route_source_at(sha)
+    if ancestry.returncode != 0 or extracted is None:
+        reason = ancestry.stderr.strip() or reason or "commit unavailable"
         print(f"note: baseline commit {sha} unreadable here ({reason}); using the committed fixture")
         return fixture, False
 
-    node = _decorated_route(ast.parse(show.stdout))
-    extracted = textwrap.dedent(ast.get_source_segment(show.stdout, node, padded=True))
-    extracted = extracted.rstrip() + "\n"
     assert extracted == fixture, (
         f"the committed baseline route fixture does not match {sha}:src/main.py"
     )

@@ -158,6 +158,16 @@ def smart_segmentation(model, response: Response, request: Request):
             # Deprecated compatibility path for maskless legacy callers.
             init_mask = init_mask_contract.download_init_mask(api, figure_id, image_id)
             model._init_mask_cache[cache_key] = init_mask
+        elif init_figure_requested:
+            # An explicit initial request must not reuse a stale continuation mask.
+            logger.warn(
+                "Smart Tool request has no 'mask' and no image to download an "
+                "initial figure from; continuing without an initial mask.",
+                extra={"figure_id": figure_id, "local_figure_id": local_figure_id},
+            )
+            if cache_key is not None:
+                model._init_mask_cache.pop(cache_key, None)
+            init_mask = None
         elif cache_key is not None and model._init_mask_cache.get(cache_key) is not None:
             # Continuation click: reuse the mask stored by the first request.
             init_mask = model._init_mask_cache[cache_key]

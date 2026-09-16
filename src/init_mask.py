@@ -19,7 +19,7 @@ This module intentionally stays free of model/torch imports: it only converts
 the request payload into the full-image CPU mask the predictor expects.
 """
 
-from numbers import Integral, Real
+from numbers import Real
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
@@ -49,11 +49,19 @@ def _parse_origin(value: Any) -> Tuple[int, int]:
     for name, coordinate in zip("xy", value):
         if isinstance(coordinate, bool) or not isinstance(coordinate, Real):
             raise InitMaskError(f"'mask.origin' {name} must be a number, got {coordinate!r}.")
-        if not isinstance(coordinate, Integral) and float(coordinate) != int(coordinate):
+        try:
+            pixel = int(coordinate)
+        except (ValueError, OverflowError) as exc:
+            # NaN / infinity pass the ``Real`` check but have no pixel value:
+            # report them as malformed input instead of letting int() escape.
+            raise InitMaskError(
+                f"'mask.origin' {name} must be a finite pixel coordinate, got {coordinate!r}."
+            ) from exc
+        if pixel != coordinate:
             raise InitMaskError(
                 f"'mask.origin' {name} must be a whole pixel coordinate, got {coordinate!r}."
             )
-        coordinates.append(int(coordinate))
+        coordinates.append(pixel)
     return coordinates[0], coordinates[1]
 
 

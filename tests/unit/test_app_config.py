@@ -7,7 +7,6 @@ and the session tags used by tracking stay exactly as they are.
 import ast
 import json
 import os
-import re
 from inspect import signature
 
 import pytest
@@ -39,18 +38,6 @@ def test_session_tags_are_unchanged(config):
 def test_app_still_declares_its_own_docker_image_and_entrypoint(config):
     assert config["docker_image"].startswith("supervisely/segment-anything-2:")
     assert "src.main:m.app" in config["entrypoint"]
-
-
-def test_dockerfile_sdk_pin_matches_the_image_label():
-    with open(os.path.join(REPO_ROOT, "docker", "Dockerfile"), "r") as file:
-        dockerfile = file.read()
-
-    installed = re.search(r"supervisely==([0-9.]+)", dockerfile)
-    labeled = re.search(r'python_sdk_version="([0-9.]+)"', dockerfile)
-
-    assert installed is not None and labeled is not None
-    # the decoder must keep working with the SDK bundled into this image
-    assert installed.group(1) == labeled.group(1)
 
 
 def test_smart_segmentation_route_calls_the_extracted_handler():

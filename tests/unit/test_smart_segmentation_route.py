@@ -247,6 +247,150 @@ def test_mask_on_a_video_frame_is_placed_in_frame_coordinates(
     assert result["success"] is True
 
 
+def test_initial_video_request_without_mask_drops_a_stale_cached_mask(
+    app_data_dir, image, pred_mask
+):
+    model = StubModel(image, pred_mask)
+    api = FakeApi(image, fail_annotation_download=True)
+    data = init_figure_mask()
+
+    call_handler(
+        model,
+        api,
+        smart_tool_context(
+            init_figure=True,
+            local_figure_id=LOCAL_FIGURE_ID,
+            mask=context_mask(data, x=7, y=5),
+        ),
+        state={"settings": {}},
+    )
+    assert model.predict_calls[0]["init_mask"].tolist() == (
+        expected_init_mask(data, x=7, y=5).tolist()
+    )
+
+    video_context = {
+        "video": {"video_id": 5, "frame_index": 3},
+        "init_figure": True,
+        "local_figure_id": LOCAL_FIGURE_ID,
+        "positive": [{"x": 13, "y": 10}],
+        "negative": [],
+    }
+    response, result = call_handler(model, api, video_context, state={"settings": {}})
+
+    assert response.status_code == 200
+    assert model.predict_calls[1]["init_mask"] is None
+    assert LOCAL_FIGURE_ID not in model._init_mask_cache
+    assert api.annotation.calls == []
+    assert result["success"] is True and result["error"] is None
+    assert result["origin"] == {"x": 20, "y": 10}
+    assert decode_response_bitmap(result).tolist() == (pred_mask[10:15, 20:24] > 0).tolist()
+
+
+def test_mask_without_init_figure_is_used_and_cached_for_continuation(
+    app_data_dir, image, pred_mask
+):
+    model = StubModel(image, pred_mask)
+    api = FakeApi(image, fail_annotation_download=True)
+    data = init_figure_mask()
+    expected = expected_init_mask(data, x=7, y=5)
+
+    call_handler(
+        model,
+        api,
+        smart_tool_context(
+            local_figure_id=LOCAL_FIGURE_ID, mask=context_mask(data, x=7, y=5)
+        ),
+        state={"settings": {}},
+    )
+    response, result = call_handler(
+        model,
+        api,
+        smart_tool_context(local_figure_id=LOCAL_FIGURE_ID),
+        state={"settings": {}},
+    )
+
+    assert model.predict_calls[0]["init_mask"].tolist() == expected.tolist()
+    assert model.predict_calls[1]["init_mask"].tolist() == expected.tolist()
+    assert api.annotation.calls == []
+    assert response.status_code == 200
+    assert result["success"] is True
+
+
+def test_mask_none_with_figure_id_uses_the_deprecated_download_path(
+    app_data_dir, image, pred_mask
+):
+    model = StubModel(image, pred_mask)
+    data = np.ones((3, 5), dtype=bool)
+    api = FakeApi(image, [bitmap_label(data, row=4, col=6, figure_id=FIGURE_ID)])
+
+    response, result = call_handler(
+        model,
+        api,
+        smart_tool_context(init_figure=True, figure_id=FIGURE_ID, mask=None),
+        state={"settings": {}},
+    )
+
+    assert response.status_code == 200 and result["success"] is True
+    assert api.annotation.calls == [IMAGE_ID]
+    assert model.predict_calls[0]["init_mask"].tolist() == (
+        expected_init_mask(data, x=6, y=4).tolist()
+    )
+
+
+def test_mask_none_without_figure_id_is_rejected(app_data_dir, image, pred_mask):
+    model = StubModel(image, pred_mask)
+    api = FakeApi(image)
+
+    response, result = call_handler(
+        model,
+        api,
+        smart_tool_context(init_figure=True, mask=None),
+        state={"settings": {}},
+    )
+
+    assert response.status_code == 400
+    assert "without a usable 'figure_id'" in result["error"]
+    assert api.annotation.calls == []
+    assert model.predict_calls == []
+    assert os.listdir(app_data_dir) == []
+
+
+def test_new_initial_mask_overwrites_cached_mask_for_continuation(
+    app_data_dir, image, pred_mask
+):
+    model = StubModel(image, pred_mask)
+    api = FakeApi(image, fail_annotation_download=True)
+    first_data = np.ones((4, 4), dtype=bool)
+    second_data = np.ones((3, 5), dtype=bool)
+    first_mask = expected_init_mask(first_data, x=1, y=2)
+    second_mask = expected_init_mask(second_data, x=12, y=9)
+
+    for data, x, y in ((first_data, 1, 2), (second_data, 12, 9)):
+        call_handler(
+            model,
+            api,
+            smart_tool_context(
+                init_figure=True,
+                local_figure_id=LOCAL_FIGURE_ID,
+                mask=context_mask(data, x=x, y=y),
+            ),
+            state={"settings": {}},
+        )
+    response, result = call_handler(
+        model,
+        api,
+        smart_tool_context(local_figure_id=LOCAL_FIGURE_ID),
+        state={"settings": {}},
+    )
+
+    assert model.predict_calls[0]["init_mask"].tolist() == first_mask.tolist()
+    assert model.predict_calls[1]["init_mask"].tolist() == second_mask.tolist()
+    assert model.predict_calls[2]["init_mask"].tolist() == second_mask.tolist()
+    assert api.annotation.calls == []
+    assert response.status_code == 200
+    assert result["success"] is True
+
+
 def test_camel_case_context_fields_are_accepted(app_data_dir, image, pred_mask):
     """Legacy callers spell the contract fields in camelCase."""
     model = StubModel(image, pred_mask)
@@ -362,6 +506,11 @@ def test_request_without_any_initial_figure_has_no_init_mask(
             id="outside-the-image",
         ),
         pytest.param("mask", "must be an object", id="not-an-object"),
+        pytest.param(
+            {"origin": [float("inf"), 2], "data": encode_mask(np.ones((2, 2), dtype=bool))},
+            "finite pixel coordinate",
+            id="non-finite-origin",
+        ),
     ],
 )
 def test_malformed_mask_returns_an_explicit_error(

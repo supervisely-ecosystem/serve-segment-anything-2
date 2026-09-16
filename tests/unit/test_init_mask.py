@@ -69,6 +69,65 @@ def test_mask_is_clipped_to_the_image(x, y, rows, cols):
     assert full_mask.tolist() == expected.tolist()
 
 
+def test_single_pixel_mask_at_bottom_right_lands_on_the_final_pixel_only():
+    data = np.ones((1, 1), dtype=bool)
+
+    full_mask = decoded_full_mask(
+        context_mask(data, x=IMAGE_WIDTH - 1, y=IMAGE_HEIGHT - 1)
+    )
+
+    assert np.count_nonzero(full_mask) == 1
+    assert full_mask[IMAGE_HEIGHT - 1, IMAGE_WIDTH - 1] == 255
+
+
+def test_single_pixel_mask_at_image_origin_lands_on_the_first_pixel():
+    data = np.ones((1, 1), dtype=bool)
+
+    full_mask = decoded_full_mask(context_mask(data, x=0, y=0))
+
+    assert np.count_nonzero(full_mask) == 1
+    assert full_mask[0, 0] == 255
+
+
+@pytest.mark.parametrize(
+    "x, y",
+    [
+        pytest.param(IMAGE_WIDTH, 0, id="right-of-image"),
+        pytest.param(-1, 0, id="left-of-image"),
+        pytest.param(0, -1, id="above-image"),
+        pytest.param(0, IMAGE_HEIGHT, id="below-image"),
+    ],
+)
+def test_single_pixel_mask_outside_the_image_is_rejected(x, y):
+    with pytest.raises(init_mask.InitMaskError, match="no pixels inside"):
+        init_mask.decode_context_mask(
+            context_mask(np.ones((1, 1), dtype=bool), x=x, y=y),
+            IMAGE_HEIGHT,
+            IMAGE_WIDTH,
+        )
+
+
+def test_oversize_mask_at_negative_origin_uses_source_offsets():
+    data = (np.arange(50)[:, None] * 80 + np.arange(80)[None, :]) % 3 == 0
+
+    full_mask = decoded_full_mask(context_mask(data, x=-5, y=-7))
+
+    expected = data[7 : 7 + IMAGE_HEIGHT, 5 : 5 + IMAGE_WIDTH].astype(np.uint8) * 255
+    assert full_mask.tolist() == expected.tolist()
+
+
+def test_oversize_mask_past_bottom_right_keeps_in_bounds_sub_block():
+    data = (np.arange(50)[:, None] * 80 + np.arange(80)[None, :]) % 3 == 0
+
+    full_mask = decoded_full_mask(
+        context_mask(data, x=IMAGE_WIDTH - 4, y=IMAGE_HEIGHT - 6)
+    )
+
+    expected = np.zeros((IMAGE_HEIGHT, IMAGE_WIDTH), dtype=np.uint8)
+    expected[IMAGE_HEIGHT - 6 :, IMAGE_WIDTH - 4 :] = data[:6, :4].astype(np.uint8) * 255
+    assert full_mask.tolist() == expected.tolist()
+
+
 def test_the_decoded_bitmap_is_positioned_in_image_coordinates():
     data = np.ones((4, 5), dtype=bool)
 
@@ -125,6 +184,16 @@ def test_an_all_zero_mask_is_rejected():
             {"origin": [1.5, 2], "data": encode_mask(np.ones((2, 2), dtype=bool))},
             "whole pixel coordinate",
             id="origin-fractional",
+        ),
+        pytest.param(
+            {"origin": [float("nan"), 2], "data": encode_mask(np.ones((2, 2), dtype=bool))},
+            "finite pixel coordinate",
+            id="origin-nan",
+        ),
+        pytest.param(
+            {"origin": [1, float("inf")], "data": encode_mask(np.ones((2, 2), dtype=bool))},
+            "finite pixel coordinate",
+            id="origin-infinite",
         ),
         pytest.param({"origin": [1, 2]}, "non-empty base64", id="data-missing"),
         pytest.param({"origin": [1, 2], "data": "   "}, "non-empty base64", id="data-blank"),

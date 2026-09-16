@@ -147,19 +147,27 @@ def main():
             f"{int((clipped > 0).sum())} px inside, shape {clipped.shape}"
         )
 
-    # 5. malformed mask is an explicit handled error, never a silent fallback
-    model, api = new_model(), FakeApi(IMAGE, fail_annotation_download=True)
-    response, result = call(
-        model,
-        api,
-        smart_tool_context(
-            init_figure=True, figure_id=FIGURE_ID, mask={"origin": [1, 2], "data": "%%%bad%%%"}
-        ),
-    )
-    assert response.status_code == 400 and result["success"] is False
-    assert model.predict_calls == [] and api.annotation.calls == []
-    assert os.listdir(os.environ["SLY_APP_DATA_DIR"]) == []
-    print(f"5. malformed mask -> HTTP {response.status_code}, error: {result['error']}")
+    # 5. malformed masks are explicit handled errors, never a silent fallback
+    for label, bad_mask in (
+        ("undecodable data", {"origin": [1, 2], "data": "%%%bad%%%"}),
+        ("non-finite origin", {"origin": [float("nan"), 2], "data": context_mask(MASK_DATA, 0, 0)["data"]}),
+        ("origin outside the image", context_mask(MASK_DATA, IMAGE_WIDTH + 4, 0)),
+    ):
+        model, api = new_model(), FakeApi(IMAGE, fail_annotation_download=True)
+        response, result = call(
+            model,
+            api,
+            smart_tool_context(init_figure=True, figure_id=FIGURE_ID, mask=bad_mask),
+        )
+        assert response.status_code == 400 and result["success"] is False, result
+        assert result["bitmap"] is None and result["origin"] is None, result
+        assert model.predict_calls == [] and api.annotation.calls == []
+        assert os.listdir(os.environ["SLY_APP_DATA_DIR"]) == []
+        print(
+            f"5. malformed mask ({label}) -> HTTP {response.status_code}, "
+            f"no predict, no download, temp files left: "
+            f"{len(os.listdir(os.environ['SLY_APP_DATA_DIR']))}, error: {result['error']}"
+        )
 
     # 6. deprecated legacy path: no mask, figure downloaded by id
     model, api = new_model(), FakeApi(
