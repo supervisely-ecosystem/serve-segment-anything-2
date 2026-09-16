@@ -247,6 +247,47 @@ def test_mask_on_a_video_frame_is_placed_in_frame_coordinates(
     assert result["success"] is True
 
 
+def test_camel_case_context_fields_are_accepted(app_data_dir, image, pred_mask):
+    """Legacy callers spell the contract fields in camelCase."""
+    model = StubModel(image, pred_mask)
+    api = FakeApi(image, fail_annotation_download=True)
+    data = np.ones((4, 6), dtype=bool)
+
+    context = smart_tool_context(
+        initFigure=True,
+        figureId=FIGURE_ID,
+        localFigureId=LOCAL_FIGURE_ID,
+        mask=context_mask(data, x=2, y=3),
+    )
+    _, result = call_handler(model, api, context, state={"settings": {}})
+
+    assert api.annotation.calls == []
+    assert model.predict_calls[0]["init_mask"].tolist() == (
+        expected_init_mask(data, x=2, y=3).tolist()
+    )
+    # continuation identity comes from the camelCase local figure id
+    assert LOCAL_FIGURE_ID in model._init_mask_cache
+    assert FIGURE_ID not in model._init_mask_cache
+    assert result["success"] is True
+
+
+def test_camel_case_maskless_legacy_request_downloads_the_figure(
+    app_data_dir, image, pred_mask
+):
+    model = StubModel(image, pred_mask)
+    data = np.ones((3, 5), dtype=bool)
+    api = FakeApi(image, [bitmap_label(data, row=4, col=6, figure_id=FIGURE_ID)])
+
+    context = smart_tool_context(initFigure=True, figureId=FIGURE_ID)
+    response, result = call_handler(model, api, context, state={"settings": {}})
+
+    assert response.status_code == 200 and result["success"] is True
+    assert api.annotation.calls == [IMAGE_ID]
+    assert model.predict_calls[0]["init_mask"].tolist() == (
+        expected_init_mask(data, x=6, y=4).tolist()
+    )
+
+
 # --------------------------------------------------------------------------- #
 # deprecated legacy figure-id path
 # --------------------------------------------------------------------------- #

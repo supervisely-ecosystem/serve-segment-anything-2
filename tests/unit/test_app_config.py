@@ -8,8 +8,11 @@ import ast
 import json
 import os
 import re
+from inspect import signature
 
 import pytest
+
+from src.smart_segmentation import smart_segmentation
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -81,9 +84,23 @@ def test_smart_segmentation_route_calls_the_extracted_handler():
         )
     ]
     assert len(routes) == 1
-    called = {
-        node.func.id
+    assert [argument.arg for argument in routes[0].args.args] == ["response", "request"]
+
+    calls = [
+        node
         for node in ast.walk(routes[0])
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    assert called == {"smart_segmentation_handler"}
+    ]
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.func.id == "smart_segmentation_handler"
+    # the served model, the response and the request reach the handler in the
+    # order its signature expects; a swapped argument cannot be caught by the
+    # handler tests themselves
+    assert [getattr(argument, "id", None) for argument in call.args] == [
+        "self",
+        "response",
+        "request",
+    ]
+    assert not call.keywords
+    assert list(signature(smart_segmentation).parameters) == ["model", "response", "request"]

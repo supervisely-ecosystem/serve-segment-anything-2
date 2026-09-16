@@ -67,10 +67,13 @@ def run(route, api, context):
 
 
 def main():
-    route = load_baseline_route()
+    route, verified = load_baseline_route()
     image = make_image()
     mask = context_mask(MASK_DATA, x=MASK_ORIGIN[0], y=MASK_ORIGIN[1])
-    print(f"baseline commit: {BASELINE_SHA}")
+    source = "read from git and byte-identical to the committed fixture" if verified else (
+        "committed fixture (the commit is not readable in this checkout)"
+    )
+    print(f"baseline commit: {BASELINE_SHA} ({source})")
 
     # 1. contract mask, no figure_id
     api = FakeApi(image)
