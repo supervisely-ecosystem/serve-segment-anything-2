@@ -8,5 +8,7 @@ app_data/
 train/tempfiles/
 tests/*
 !tests/unit/
+!tests/support/
+!tests/replay/
 test_results/
 debug.env

@@ -1,9 +1,9 @@
 """Smart Tool ``/smart_segmentation`` request handling.
 
 The handler lives outside of ``src/main.py`` so that the production request
-flow (parsing, initial figure normalization, predictor hand-off and bitmap
-response transport) can be imported and regression-tested on CPU without
-loading the model stack.
+flow (parsing, initial mask decoding, predictor hand-off and bitmap response
+transport) can be imported and regression-tested on CPU without loading the
+model stack.
 """
 
 import os
@@ -19,7 +19,7 @@ from supervisely.nn.inference.interactive_segmentation import functional
 from supervisely.sly_logger import logger
 from supervisely.volume_annotation.volume_annotation import Plane
 
-from src import init_figure
+from src import init_mask as init_mask_contract
 
 
 def get_plane_name(normal):
@@ -126,28 +126,47 @@ def smart_segmentation(model, response: Response, request: Request):
         image_np = image_np[0]
     sly_image.write(image_path, image_np)
 
-    # Prepare init_mask (only for images)
-    figure_id = smtool_state.get("figure_id")
+    # Prepare init_mask
+    figure_id = init_mask_contract.get_context_value(
+        smtool_state, "figure_id", "figureId"
+    )
+    local_figure_id = init_mask_contract.get_context_value(
+        smtool_state, "local_figure_id", "localFigureId"
+    )
+    init_figure_requested = (
+        init_mask_contract.get_context_value(smtool_state, "init_figure", "initFigure")
+        is True
+    )
+    context_mask = smtool_state.get(init_mask_contract.MASK_KEY)
     image_id = smtool_state.get("image_id")
+    # Continuation identity: the platform's local figure id when available,
+    # legacy figure_id otherwise.
+    cache_key = local_figure_id if local_figure_id is not None else figure_id
     # The downloaded image is the canvas the predictor works on, so the initial
-    # figure is normalized to exactly this size.
+    # mask is placed on exactly this size.
     image_height, image_width = image_np.shape[:2]
     try:
-        if smtool_state.get("init_figure") is True and image_id is not None:
-            # Download, normalize and save in Cache
-            init_mask = init_figure.download_init_mask(
-                api, figure_id, image_id, image_height, image_width
+        if context_mask is not None:
+            # Shared direct-mask contract: the supplied mask wins and no
+            # annotation is downloaded, even when a figure_id is also present.
+            init_mask = init_mask_contract.decode_context_mask(
+                context_mask, image_height, image_width
             )
-            model._init_mask_cache[figure_id] = init_mask
-        elif model._init_mask_cache.get(figure_id) is not None:
-            # Load from Cache
-            init_mask = model._init_mask_cache[figure_id]
+            if cache_key is not None:
+                model._init_mask_cache[cache_key] = init_mask
+        elif init_figure_requested and image_id is not None:
+            # Deprecated compatibility path for maskless legacy callers.
+            init_mask = init_mask_contract.download_init_mask(api, figure_id, image_id)
+            model._init_mask_cache[cache_key] = init_mask
+        elif cache_key is not None and model._init_mask_cache.get(cache_key) is not None:
+            # Continuation click: reuse the mask stored by the first request.
+            init_mask = model._init_mask_cache[cache_key]
         else:
             init_mask = None
-    except init_figure.InitFigureError as exc:
-        # Unsupported or malformed initial figures are reported explicitly
-        # instead of being silently ignored.
-        logger.warn("Error preparing initial figure: " + str(exc), exc_info=True)
+    except init_mask_contract.InitMaskError as exc:
+        # Malformed or unusable initial masks are reported explicitly instead
+        # of being silently ignored.
+        logger.warn("Error preparing initial mask: " + str(exc), exc_info=True)
         silent_remove(image_path)
         response.status_code = status.HTTP_400_BAD_REQUEST
         return {
@@ -157,7 +176,9 @@ def smart_segmentation(model, response: Response, request: Request):
             "error": str(exc),
         }
     if init_mask is not None:
-        init_mask = init_figure.bitmap_to_mask(init_mask, image_height, image_width)
+        init_mask = init_mask_contract.bitmap_to_mask(
+            init_mask, image_height, image_width
+        )
         # init_mask = functional.crop_image(crop, init_mask)
         assert init_mask.shape[:2] == image_np.shape[:2]
     settings["init_mask"] = init_mask
