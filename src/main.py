@@ -1,3 +1,16 @@
+# MEASUREMENT: cap glibc's arena count before anything spawns a thread.
+#
+# A 26-track run showed in-use memory flat at 0.87 GiB while free-but-retained
+# memory grew 0.21 -> 2.87 GiB across 156 arenas. Nothing leaks; the allocator
+# simply never returns it, and memory freed in one arena cannot satisfy an
+# allocation in another. M_ARENA_MAX is -8 in glibc's mallopt.
+import ctypes as _ctypes
+
+try:
+    _ctypes.CDLL("libc.so.6").mallopt(-8, 2)
+except Exception:  # noqa: BLE001
+    pass
+
 import asyncio
 import functools
 import json
