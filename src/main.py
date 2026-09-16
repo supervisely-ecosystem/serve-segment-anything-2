@@ -1058,7 +1058,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 video_path=temp_frames_dir,
                 offload_video_to_cpu=True,
                 offload_state_to_cpu=True,
-                async_loading_frames=True,
+                async_loading_frames=False,  # MEASUREMENT: avoid the float64 cache
             )
 
         for i, input_geom_data in enumerate(input_geometries):
@@ -1245,7 +1245,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     video_path=temp_frames_dir,
                     offload_video_to_cpu=True,
                     offload_state_to_cpu=True,
-                    async_loading_frames=True,
+                    async_loading_frames=False,  # MEASUREMENT: avoid the float64 cache
                 )
 
             for figure in figures:
@@ -1678,7 +1678,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     video_path=temp_frames_dir,
                     offload_video_to_cpu=True,
                     offload_state_to_cpu=True,
-                    async_loading_frames=True,
+                    async_loading_frames=False,  # MEASUREMENT: avoid the float64 cache
                 )
 
             for figure in figures:
