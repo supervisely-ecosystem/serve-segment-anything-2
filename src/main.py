@@ -7,6 +7,7 @@ import time
 import traceback
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+import itertools
 from queue import Queue, Empty
 from typing import Any, Dict, List, Literal
 import uuid
@@ -109,6 +110,185 @@ def download_frames_to_paths(cache, api, video_id, frame_indexes, paths, progres
         # download must fail the track rather than leave a missing file for the
         # model to trip over later.
         list(pool.map(_fetch, pairs))
+
+
+# ---------------------------------------------------------------------------
+# INSTRUMENTATION. Measures, changes nothing. Do not merge.
+#
+# A previous attempt to bound this session's memory was built on the arithmetic
+# "12 MiB per frame times frames in flight" and did not stop the OOM, which
+# means that arithmetic is not the whole cost. This reports what the container
+# itself says, so the next attempt is aimed at a measurement.
+# ---------------------------------------------------------------------------
+TRACK_LEDGER_LOCK = threading.Lock()
+TRACK_LEDGER = {}
+TRACK_SEQUENCE = itertools.count(1)
+
+
+def _read_first_line(path):
+    try:
+        with open(path) as handle:
+            return handle.read().strip()
+    except OSError:
+        return None
+
+
+def _cgroup(name_v2, name_v1):
+    raw = _read_first_line(f"/sys/fs/cgroup/{name_v2}")
+    if raw is None:
+        raw = _read_first_line(f"/sys/fs/cgroup/memory/{name_v1}")
+    if raw is None or raw == "max":
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return None if value <= 0 or value >= 1 << 62 else value
+
+
+def _proc_status_kb(field):
+    try:
+        with open("/proc/self/status") as handle:
+            for line in handle:
+                if line.startswith(field):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return None
+
+
+def _filesystem_of(path):
+    """Which filesystem backs a path -- tmpfs means it costs RAM, not disk."""
+    try:
+        with open("/proc/self/mounts") as handle:
+            mounts = [line.split() for line in handle]
+    except OSError:
+        return None
+    best = None
+    for fields in mounts:
+        if len(fields) < 3:
+            continue
+        mount_point, fs_type = fields[1], fields[2]
+        if path.startswith(mount_point) and (best is None or len(mount_point) > len(best[0])):
+            best = (mount_point, fs_type)
+    return None if best is None else {"mount": best[0], "type": best[1]}
+
+
+def _dir_bytes(path, file_cap=200000):
+    total = 0
+    count = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.stat(os.path.join(root, name)).st_size
+            except OSError:
+                continue
+            count += 1
+            if count >= file_cap:
+                return total, count, True
+    return total, count, False
+
+
+def _fs_used(path):
+    try:
+        stats = os.statvfs(path)
+    except OSError:
+        return None
+    return (stats.f_blocks - stats.f_bfree) * stats.f_frsize
+
+
+def track_ledger_enter(kind, frames):
+    entry_id = next(TRACK_SEQUENCE)
+    with TRACK_LEDGER_LOCK:
+        TRACK_LEDGER[entry_id] = {"kind": kind, "frames": frames, "started": time.time()}
+    return entry_id
+
+
+def track_ledger_exit(entry_id):
+    with TRACK_LEDGER_LOCK:
+        TRACK_LEDGER.pop(entry_id, None)
+
+
+def _instrumented(kind):
+    def decorate(method):
+        @functools.wraps(method)
+        def wrapper(self, api, context, *args, **kwargs):
+            frames = int(context.get("frames", 0)) + 1
+            entry_id = track_ledger_enter(kind, frames)
+            try:
+                return method(self, api, context, *args, **kwargs)
+            finally:
+                track_ledger_exit(entry_id)
+
+        return wrapper
+
+    return decorate
+
+
+def memory_probe(app_instance=None):
+    """Everything that could be filling the container, from the container."""
+    with TRACK_LEDGER_LOCK:
+        live = list(TRACK_LEDGER.values())
+
+    now = time.time()
+    frames_in_flight = sum(entry["frames"] for entry in live)
+
+    report = {
+        "tracks_in_flight": len(live),
+        "frames_in_flight": frames_in_flight,
+        "frames_in_flight_gib": round(frames_in_flight * 12 * 1024 * 1024 / (1024 ** 3), 3),
+        "tracks": [
+            {"kind": e["kind"], "frames": e["frames"], "age_s": round(now - e["started"], 1)}
+            for e in live
+        ],
+        "rss_bytes": _proc_status_kb("VmRSS:"),
+        "vmhwm_bytes": _proc_status_kb("VmHWM:"),
+        "cgroup_current_bytes": _cgroup("memory.current", "memory.usage_in_bytes"),
+        "cgroup_peak_bytes": _cgroup("memory.peak", "memory.max_usage_in_bytes"),
+        "cgroup_limit_bytes": _cgroup("memory.max", "limit_in_bytes"),
+    }
+
+    # /dev/shm is an emptyDir with medium=Memory, so whatever sits in it counts
+    # against the same limit as the heap.
+    report["shm"] = {"used_bytes": _fs_used("/dev/shm"), "fs": _filesystem_of("/dev/shm")}
+
+    # The SDK's "disk" cache. If its directory is on a tmpfs, it is not disk.
+    cache_dir = os.environ.get("SMART_CACHE_CONTAINER_DIR", "/tmp/smart_cache")
+    cache_bytes, cache_files, capped = _dir_bytes(cache_dir)
+    report["smart_cache"] = {
+        "dir": cache_dir,
+        "bytes": cache_bytes,
+        "files": cache_files,
+        "capped": capped,
+        "fs": _filesystem_of(cache_dir),
+    }
+
+    # The per-request frame directories this app writes before init_state.
+    frames_dir = os.path.abspath("frames")
+    frames_bytes, frames_files, frames_capped = _dir_bytes(frames_dir)
+    report["frames_dirs"] = {
+        "dir": frames_dir,
+        "bytes": frames_bytes,
+        "files": frames_files,
+        "capped": frames_capped,
+        "fs": _filesystem_of(frames_dir),
+    }
+
+    try:
+        report["torch_cuda"] = {
+            "allocated_bytes": torch.cuda.memory_allocated(),
+            "reserved_bytes": torch.cuda.memory_reserved(),
+        }
+    except Exception as failure:  # noqa: BLE001
+        report["torch_cuda"] = {"error": str(failure)[:120]}
+
+    try:
+        cache = getattr(app_instance, "cache", None)
+        report["sdk_cache_entries"] = len(cache._cache) if cache is not None else None
+    except Exception as failure:  # noqa: BLE001
+        report["sdk_cache_entries"] = f"error: {str(failure)[:80]}"
+
+    return report
 
 
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
@@ -654,6 +834,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         visible = smarttool_input["visible"]
         return crop, positive, negative, visible
 
+    @_instrumented("track_api")
     @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
     @mock.patch("sam2.utils.misc.tqdm", notqdm)
     def _track_api(self, api: sly.Api, context: dict):
@@ -780,6 +961,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         self.video_predictor.reset_state(inference_state)
         return results
 
+    @_instrumented("track")
     def _track(
         self,
         api: sly.Api,
@@ -1057,6 +1239,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 notify_thread.join()
             remove_dir(temp_frames_dir)
 
+    @_instrumented("track_async")
     @mock.patch("sam2.sam2_video_predictor.tqdm", notqdm)
     @mock.patch("sam2.utils.misc.tqdm", notqdm)
     def _track_async(self, api: sly.Api, context: dict, request_uuid: str = None):
@@ -1723,6 +1906,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     "error": None,
                 }
             return response
+
+        @server.post("/mem-probe")
+        def mem_probe():
+            return memory_probe(self)
 
         @server.post("/is_online")
         def is_online(response: Response, request: Request):
