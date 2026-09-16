@@ -6,6 +6,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
 from typing import Any, Dict, List, Literal
 import uuid
@@ -67,6 +68,47 @@ def get_plane_name(normal):
         return Plane.AXIAL
     else:
         return "Unknown"
+
+
+def download_frames_to_paths(cache, api, video_id, frame_indexes, paths, progress_cb=None):
+    """Write video frames to paths, without the SDK's lookup-by-key.
+
+    A workaround for supervisely/issues#6163, not a preference.
+    `InferenceImageCache.download_frames_to_paths()` stores each frame and then
+    reads it back out of the cache by key, and `download_frame()` has a path --
+    taken whenever the whole video is already cached as a file -- that returns
+    the frame without storing it at all. The two disagree, and the read raises
+    `KeyError('frame_<video_id>_<n>')`, failing the whole track.
+
+    The apps make that likely rather than rare: `run_cache_task_manually()`
+    caches the video in a background thread immediately before this is called,
+    so the video routinely arrives between the caller's check and the cache's.
+
+    `download_frame()` itself returns the right frame on every one of its
+    paths. Taking what it returns and writing it here sidesteps the defect
+    without touching the SDK, and is immune to the second route to the same
+    error -- eviction between the store and the read, which SMART_CACHE_SIZE
+    (default 256 frames) makes reachable with two concurrent tracks.
+
+    Remove this and call the SDK again once #6163 has shipped and the
+    supervisely pin in this repository has moved past it.
+    """
+    # Five at a time, matching what the SDK did, so the load this puts on the
+    # instance is unchanged.
+    def _fetch(index_and_path):
+        frame_index, path = index_and_path
+        frame = cache.download_frame(api, video_id, frame_index)
+        sly_image.write(path, frame)
+        if progress_cb is not None:
+            progress_cb()
+
+    pairs = list(zip(frame_indexes, paths))
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        # list() rather than leaving the iterator lazy: map() swallows
+        # exceptions until the results are consumed, and a frame that failed to
+        # download must fail the track rather than leave a missing file for the
+        # model to trip over later.
+        list(pool.map(_fetch, pairs))
 
 
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
@@ -652,7 +694,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         # save frames to directory
         api.logger.debug("Saving frames to directory...", extra=log_extra)
         mkdir(temp_frames_dir, remove_content_if_exists=True)
-        self.cache.download_frames_to_paths(
+        download_frames_to_paths(
+            self.cache,
             api,
             video_id,
             frames_indexes,
@@ -837,7 +880,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             # save frames to directory
             api.logger.debug("Saving frames to directory...", extra=log_extra)
             mkdir(temp_frames_dir, remove_content_if_exists=True)
-            self.cache.download_frames_to_paths(
+            download_frames_to_paths(
+                self.cache,
                 api,
                 video_id,
                 frames_indexes,
@@ -1256,7 +1300,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             # save frames to directory
             api.logger.debug("Saving frames to directory...", extra=log_extra)
             mkdir(temp_frames_dir, remove_content_if_exists=True)
-            self.cache.download_frames_to_paths(
+            download_frames_to_paths(
+                self.cache,
                 api,
                 video_id,
                 list(
