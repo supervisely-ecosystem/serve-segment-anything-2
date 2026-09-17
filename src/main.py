@@ -932,7 +932,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     n_frames + 1,
                     extra={**log_extra},
                 )
-                progress.iter_done()
+                progress.iter_done_report()
 
         try:
             # save frames to directory
@@ -1049,7 +1049,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         if len(items) > 0:
                             for item in items:
                                 upload_f(*item[:3])
-                            progress.iters_done(sum(1 for item in items if item[3]))
+                            uploaded_cnt = sum(1 for item in items if item[3])
+                            if uploaded_cnt > 0:
+                                progress.iters_done_report(uploaded_cnt)
                             continue
                         if stop_event.is_set():
                             api.video.notify_progress(
