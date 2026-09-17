@@ -68,6 +68,8 @@ from supervisely.nn.inference.inference import (
 )
 from supervisely.volume_annotation.volume_annotation import Plane
 
+from src.init_mask import InitMaskError, build_init_mask, init_bitmap_from_request
+
 
 load_dotenv("supervisely.env")
 load_dotenv("debug.env")
@@ -1664,25 +1666,45 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 image_np = image_np[0]
             sly_image.write(image_path, image_np)
 
-            # Prepare init_mask (only for images)
+            # Prepare init_mask (only for images).
+            #
+            # A request that carries the figure's mask inline is authoritative:
+            # the init mask is built from it and nothing is resolved through the
+            # API. `figure_id`/`init_figure` stay accepted but are deprecated
+            # for this purpose -- they resolve the figure through the image
+            # annotation, which only ever worked for bitmap figures.
             figure_id = smtool_state.get("figure_id")
             image_id = smtool_state.get("image_id")
-            if smtool_state.get("init_figure") is True and image_id is not None:
-                # Download and save in Cache
-                init_mask = functional.download_init_mask(api, figure_id, image_id)
-                self._init_mask_cache[figure_id] = init_mask
-            elif self._init_mask_cache.get(figure_id) is not None:
-                # Load from Cache
-                init_mask = self._init_mask_cache[figure_id]
-            else:
-                init_mask = None
-            if init_mask is not None:
-                image_info = api.image.get_info_by_id(image_id)
-                init_mask = functional.bitmap_to_mask(
-                    init_mask, image_info.height, image_info.width
-                )
-                # init_mask = functional.crop_image(crop, init_mask)
-                assert init_mask.shape[:2] == image_np.shape[:2]
+            try:
+                init_bitmap = init_bitmap_from_request(smtool_state)
+                if init_bitmap is not None:
+                    if figure_id is not None:
+                        self._init_mask_cache[figure_id] = init_bitmap
+                    init_mask = build_init_mask(init_bitmap, *image_np.shape[:2])
+            except InitMaskError as exc:
+                # Never fall back to the deprecated download: the client asked
+                # for a specific mask to be refined, so a broken one is an
+                # error rather than a reason to refine a different mask.
+                logger.warn(f"Invalid init mask in request: {exc}", exc_info=True)
+                response.status_code = status.HTTP_400_BAD_REQUEST
+                return {"message": f"400: Bad request. {exc}", "success": False}
+            if init_bitmap is None:
+                if smtool_state.get("init_figure") is True and image_id is not None:
+                    # Download and save in Cache
+                    init_mask = functional.download_init_mask(api, figure_id, image_id)
+                    self._init_mask_cache[figure_id] = init_mask
+                elif self._init_mask_cache.get(figure_id) is not None:
+                    # Load from Cache
+                    init_mask = self._init_mask_cache[figure_id]
+                else:
+                    init_mask = None
+                if init_mask is not None:
+                    image_info = api.image.get_info_by_id(image_id)
+                    init_mask = functional.bitmap_to_mask(
+                        init_mask, image_info.height, image_info.width
+                    )
+                    # init_mask = functional.crop_image(crop, init_mask)
+                    assert init_mask.shape[:2] == image_np.shape[:2]
             settings["init_mask"] = init_mask
 
             self._inference_image_lock.acquire()
