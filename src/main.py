@@ -215,9 +215,30 @@ TRACK_SLOT_TIMEOUT = float(os.environ.get("TRACK_SLOT_TIMEOUT", "1800"))
 _tracking_slots = threading.BoundedSemaphore(MAX_CONCURRENT_TRACKS)
 
 
+def _diag(kind, text):
+    """TEMPORARY: publish a message to task data so it can be read over the API."""
+    try:
+        import supervisely as _sly
+        from supervisely.api.api import Api as _Api
+
+        _api = _Api.from_env()
+        _tid = _sly.env.task_id()
+        _api.task.set_field(
+            _tid,
+            "data.case_diag",
+            [{"kind": kind, "thread": threading.current_thread().name, "text": text[:4000]}],
+            append=True,
+        )
+    except Exception as _e:
+        print("diag failed:", _e)
+
+
+
 def acquire_tracking_slot(log_extra: Dict = None) -> None:
     """Block until one of `MAX_CONCURRENT_TRACKS` tracking slots is free."""
+    _diag("acquire-enter", str(log_extra))
     if _tracking_slots.acquire(blocking=False):
+        _diag("acquire-immediate", str(log_extra))
         return
     logger.info(
         "Waiting for a free tracking slot (%d concurrent tracks allowed)",
@@ -232,6 +253,7 @@ def acquire_tracking_slot(log_extra: Dict = None) -> None:
 
 
 def release_tracking_slot() -> None:
+    _diag("release", "")
     _tracking_slots.release()
 
 
@@ -1130,6 +1152,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         exc_info=True,
                         extra=log_extra,
                     )
+                    _diag("upload-loop-error", traceback.format_exc())
                     upload_error.set()
                     raise
 
@@ -1164,6 +1187,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             raise
         else:
             sly.logger.info("Successfully finished tracking process", extra=log_extra)
+            _diag("track-finished", str(log_extra))
         finally:
             if self.video_predictor is not None and inference_state is not None:
                 # reset predictor state
@@ -2043,6 +2067,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 except Exception as exc:
                     print("An error occured:")
                     print(traceback.format_exc())
+                    _diag("track-error", traceback.format_exc())
                     request: Request = args[0]
                     context = request.state.context
                     api: sly.Api = request.state.api
