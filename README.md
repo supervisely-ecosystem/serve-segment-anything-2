@@ -75,6 +75,18 @@ Fast labeling of images batch via [Batched Smart Tool](https://ecosystem.supervi
     <source src="https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/v0.0.1/sam2_batched_smart_tool.mp4" type="video/mp4">
 </video>
 
+# Smart Tool init mask
+
+When the Smart Tool refines an existing figure, the `/smart_segmentation` request (and the `/smart_segmentation_batch` and `/smart_segmentation_batched` wrappers, which re-enter the same route) carries that figure's current mask inline:
+
+```json
+"mask": { "data": "<base64 string>", "origin": { "x": 19, "y": 7 } }
+```
+
+`data` is the encoding Supervisely bitmaps already use on the wire — base64 of a zlib-compressed PNG whose non-zero pixels are foreground — and `origin` is the top-left corner of the mask in full-image pixel coordinates, column (`x`) and row (`y`). When `mask` is present the app builds the init mask from it alone and resolves nothing through the API, which is what lets polygon, multipolygon and AnyShape figures be re-edited: the app never has to parse the stored figure back as a bitmap. A `mask` that cannot be decoded is answered with `400 Bad request` rather than being silently replaced by a different mask. The app keeps answering with a raster mask (`{origin, bitmap, success, error}`); the geometry the result is written back as is chosen by the platform.
+
+`figure_id` and `init_figure` are still accepted and behave exactly as before, but they are **deprecated** for init-mask purposes: they resolve the figure by downloading the image annotation, which only ever worked for bitmap figures.
+
 # Controls
 
 | Key                                                           | Description                               |
