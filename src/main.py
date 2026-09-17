@@ -191,6 +191,50 @@ def download_frames_to_paths(cache, api, video_id, frame_indexes, paths, progres
 LOAD_FRAMES_ASYNC = False
 
 
+# Cap how many tracks may hold a SAM2 inference state at once.
+#
+# A shared session serves every user of the deployment, and nothing in SAM2 or
+# in the platform bounds how many tracks run concurrently. `init_state` below is
+# called with `offload_video_to_cpu=True`, so a track's whole frame stack lives
+# in host RAM until it finishes: `torch.zeros(num_frames, 3, 1024, 1024,
+# dtype=torch.float32)` in sam2/utils/misc.py, 12 MiB per frame. Two hundred
+# frames is 2.4 GiB, so a handful of overlapping tracks exceeds a container
+# memory limit -- and the kill takes down the session, losing every track in
+# flight rather than only the one that tipped it over.
+#
+# Serialising them makes a queued track slower to start. That is the trade: a
+# track that waits finishes, a track that is killed does not. The GPU is shared
+# anyway, so concurrent tracks were already contending for it.
+MAX_CONCURRENT_TRACKS = max(1, int(os.environ.get("MAX_CONCURRENT_TRACKS", "1")))
+
+# How long a track waits for a free slot before giving up. A normal track takes
+# well under a minute, so this is only reached when a running one is stuck, and
+# failing with a clear message beats wedging the session silently.
+TRACK_SLOT_TIMEOUT = float(os.environ.get("TRACK_SLOT_TIMEOUT", "1800"))
+
+_tracking_slots = threading.BoundedSemaphore(MAX_CONCURRENT_TRACKS)
+
+
+def acquire_tracking_slot(log_extra: Dict = None) -> None:
+    """Block until one of `MAX_CONCURRENT_TRACKS` tracking slots is free."""
+    if _tracking_slots.acquire(blocking=False):
+        return
+    logger.info(
+        "Waiting for a free tracking slot (%d concurrent tracks allowed)",
+        MAX_CONCURRENT_TRACKS,
+        extra=log_extra,
+    )
+    if not _tracking_slots.acquire(timeout=TRACK_SLOT_TIMEOUT):
+        raise RuntimeError(
+            f"Timed out after {TRACK_SLOT_TIMEOUT:.0f}s waiting for a free tracking "
+            f"slot; {MAX_CONCURRENT_TRACKS} track(s) are still running."
+        )
+
+
+def release_tracking_slot() -> None:
+    _tracking_slots.release()
+
+
 class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -777,76 +821,90 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 self.config, self.weights_path
             )
 
-        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-            inference_state = self.video_predictor.init_state(
-                video_path=temp_frames_dir,
-                offload_video_to_cpu=True,
-                offload_state_to_cpu=True,
-                async_loading_frames=LOAD_FRAMES_ASYNC,
-            )
-
-        for i, input_geom_data in enumerate(input_geometries):
-            geometry = self._deserialize_geometry(input_geom_data)
-            if not isinstance(geometry, sly.Bitmap) and not isinstance(
-                geometry, sly.Polygon
-            ):
-                raise TypeError(
-                    f"This app does not support {geometry.geometry_name()} tracking"
-                )
-            # convert polygon to bitmap
-            if isinstance(geometry, sly.Polygon):
-                polygon_obj_class = sly.ObjClass("polygon", sly.Polygon)
-                polygon_label = sly.Label(geometry, polygon_obj_class)
-                bitmap_obj_class = sly.ObjClass("bitmap", sly.Bitmap)
-                bitmap_label = polygon_label.convert(bitmap_obj_class)[0]
-                geometry = bitmap_label.geometry
-
-            first_frame = sly_image.read(f"{temp_frames_dir}/0.jpg")
-            prompt = self.generate_artificial_prompt(geometry, first_frame)
-            smarttool_input = (prompt["bbox"], prompt["point_coordinates"], [], True)
-
-            # bbox - ltrb
-            # points - col, row
-            bbox, positive_clicks, negative_clicks, _ = smarttool_input
-            if not self.use_bbox.is_switched():
-                bbox = None
+        inference_state = None
+        acquire_tracking_slot(log_extra)
+        try:
             with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                self.video_predictor.add_new_points_or_box(
-                    inference_state=inference_state,
-                    frame_idx=0,
-                    obj_id=i,
-                    points=positive_clicks + negative_clicks,
-                    labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
-                    box=bbox,
+                inference_state = self.video_predictor.init_state(
+                    video_path=temp_frames_dir,
+                    offload_video_to_cpu=True,
+                    offload_state_to_cpu=True,
+                    async_loading_frames=LOAD_FRAMES_ASYNC,
                 )
 
-        results = []
-        # run propagation throughout the video
-        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-            for (
-                out_frame_idx,
-                _,
-                out_mask_logits,
-            ) in self.video_predictor.propagate_in_video(inference_state):
-                # skip first frame prediction
-                if out_frame_idx == 0:
-                    continue
-                results.append([])
-                for masks in out_mask_logits:
-                    masks = (masks > 0.0).cpu().numpy()
-                    sum_mask = np.any(masks, axis=0)
-                    if np.all(~sum_mask):
-                        logger.debug(
-                            "Empty mask detected",
-                            extra={**log_extra, "out_frame_idx": out_frame_idx},
-                        )
-                        continue
-                    geometry = sly.Bitmap(sum_mask, extra_validation=False)
-                    results[-1].append(
-                        {"type": geometry.geometry_name(), "data": geometry.to_json()}
+            for i, input_geom_data in enumerate(input_geometries):
+                geometry = self._deserialize_geometry(input_geom_data)
+                if not isinstance(geometry, sly.Bitmap) and not isinstance(
+                    geometry, sly.Polygon
+                ):
+                    raise TypeError(
+                        f"This app does not support {geometry.geometry_name()} tracking"
+                    )
+                # convert polygon to bitmap
+                if isinstance(geometry, sly.Polygon):
+                    polygon_obj_class = sly.ObjClass("polygon", sly.Polygon)
+                    polygon_label = sly.Label(geometry, polygon_obj_class)
+                    bitmap_obj_class = sly.ObjClass("bitmap", sly.Bitmap)
+                    bitmap_label = polygon_label.convert(bitmap_obj_class)[0]
+                    geometry = bitmap_label.geometry
+
+                first_frame = sly_image.read(f"{temp_frames_dir}/0.jpg")
+                prompt = self.generate_artificial_prompt(geometry, first_frame)
+                smarttool_input = (prompt["bbox"], prompt["point_coordinates"], [], True)
+
+                # bbox - ltrb
+                # points - col, row
+                bbox, positive_clicks, negative_clicks, _ = smarttool_input
+                if not self.use_bbox.is_switched():
+                    bbox = None
+                with torch.inference_mode(), torch.autocast(
+                    "cuda", dtype=torch.bfloat16
+                ):
+                    self.video_predictor.add_new_points_or_box(
+                        inference_state=inference_state,
+                        frame_idx=0,
+                        obj_id=i,
+                        points=positive_clicks + negative_clicks,
+                        labels=[1] * len(positive_clicks) + [0] * len(negative_clicks),
+                        box=bbox,
                     )
 
-        self.video_predictor.reset_state(inference_state)
+            results = []
+            # run propagation throughout the video
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                for (
+                    out_frame_idx,
+                    _,
+                    out_mask_logits,
+                ) in self.video_predictor.propagate_in_video(inference_state):
+                    # skip first frame prediction
+                    if out_frame_idx == 0:
+                        continue
+                    results.append([])
+                    for masks in out_mask_logits:
+                        masks = (masks > 0.0).cpu().numpy()
+                        sum_mask = np.any(masks, axis=0)
+                        if np.all(~sum_mask):
+                            logger.debug(
+                                "Empty mask detected",
+                                extra={**log_extra, "out_frame_idx": out_frame_idx},
+                            )
+                            continue
+                        geometry = sly.Bitmap(sum_mask, extra_validation=False)
+                        results[-1].append(
+                            {
+                                "type": geometry.geometry_name(),
+                                "data": geometry.to_json(),
+                            }
+                        )
+
+        finally:
+            if inference_state is not None:
+                self.video_predictor.reset_state(inference_state)
+                # Drop the frame stack before the slot is handed on, so two
+                # tracks never hold their frames in RAM at the same time.
+                inference_state = None
+            release_tracking_slot()
         return results
 
     def _track(
@@ -918,6 +976,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         notify_thread = threading.Thread(target=_notify_loop, daemon=True)
         notify_thread.start()
         inference_state = None
+        tracking_slot_held = False
         upload_thread = None
         temp_frames_dir = f"frames/{track_id}"
         save_frames_current = 0
@@ -952,6 +1011,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 self.video_predictor = build_sam2_video_predictor(
                     self.config, self.weights_path
                 )
+            acquire_tracking_slot(log_extra)
+            tracking_slot_held = True
             with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
                 inference_state = self.video_predictor.init_state(
                     video_path=temp_frames_dir,
@@ -1107,6 +1168,12 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if self.video_predictor is not None and inference_state is not None:
                 # reset predictor state
                 self.video_predictor.reset_state(inference_state)
+            # Drop the frame stack before the slot is handed on, so two tracks
+            # never hold their frames in RAM at the same time.
+            inference_state = None
+            if tracking_slot_held:
+                release_tracking_slot()
+                tracking_slot_held = False
             if upload_thread is not None and upload_thread.is_alive():
                 upload_stop.set()
                 upload_thread.join()
@@ -1340,6 +1407,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         notify_thread.start()
 
         inference_state = None
+        tracking_slot_held = False
         api.logger.info("Start tracking.")
         error = False
         try:
@@ -1373,6 +1441,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     self.config, self.weights_path
                 )
 
+            acquire_tracking_slot(log_extra)
+            tracking_slot_held = True
             with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
                 inference_state = self.video_predictor.init_state(
                     video_path=temp_frames_dir,
@@ -1500,6 +1570,12 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
             if self.video_predictor is not None and inference_state is not None:
                 # reset predictor state
                 self.video_predictor.reset_state(inference_state)
+            # Drop the frame stack before the slot is handed on, so two tracks
+            # never hold their frames in RAM at the same time.
+            inference_state = None
+            if tracking_slot_held:
+                release_tracking_slot()
+                tracking_slot_held = False
             remove_dir(temp_frames_dir)
             stop_upload_event.set()
             if upload_thread.is_alive():
