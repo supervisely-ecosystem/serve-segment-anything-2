@@ -207,15 +207,28 @@ LOAD_FRAMES_ASYNC = False
 # with "App is not ready yet" until it is back.
 #
 # Measured on 8 G sessions that died, from their own logs: 467 and 494 frames
-# in flight were killed, 310 survived. The share below puts the bound at 349
-# frames (~4.4 GB) on an 8 G limit, inside that bracket, and scales with the
-# limit so a session given more memory tracks more at once without a release.
+# in flight were killed, 310 survived.
 FRAME_TENSOR_BYTES = 3 * 1024 * 1024 * 4  # float32 CHW at SAM2's image_size
 
-# The rest of the limit is the weights, the CUDA host allocations, the
-# offloaded inference state and the JPEGs on their way in -- none of which this
-# counts, which is why it does not claim all of it.
-FRAME_BUDGET_SHARE = 0.55
+# How much of the memory left after the model is loaded frame tensors may
+# claim. What is left is measured rather than assumed: a budget taken as a
+# fixed 0.55 of the whole limit left an 8 G session ~0.2 GiB of headroom,
+# because the weights, the CUDA host allocations and the allocator's retained
+# arenas are 3.1-3.2 GiB there and no share of the limit can know that. It was
+# OOM-killed again at ~345 frames -- inside its own budget.
+#
+# The rest is held back for what this still does not count: the per-object
+# inference state, which init_state() offloads to host RAM as well, the JPEGs
+# on their way in, and the peaks between a frame stack being allocated and the
+# track that owns it releasing it.
+FREE_MEMORY_SHARE = 0.6
+
+# Used until the model is loaded, when there is nothing to measure -- and as
+# the fallback if the measurement cannot be taken at all. Nothing can track
+# before the model is loaded, so this only has to be safe, not accurate: it is
+# roughly where the measured budget lands on the 8 G sessions this was sized
+# against.
+STARTUP_FRAME_BUDGET_SHARE = 0.35
 
 # When neither a cgroup limit nor MemTotal can be read.
 DEFAULT_FRAME_BUDGET = 256
@@ -262,8 +275,25 @@ def _memory_limit_bytes():
     return None
 
 
-def _track_frame_budget():
-    """Frames all in-flight tracks may hold between them."""
+def _process_rss_bytes():
+    """Resident memory this process holds right now, or None if unreadable."""
+    try:
+        with open("/proc/self/status") as status:
+            for line in status:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, IndexError, ValueError):
+        pass
+    return None
+
+
+def _track_frame_budget(reserved_bytes=None):
+    """Frames all in-flight tracks may hold between them.
+
+    `reserved_bytes` is what the process already holds and will not give back
+    -- the loaded model, mostly. Before it is known, the budget falls back to a
+    conservative share of the whole limit.
+    """
     override = os.environ.get("SLY_TRACK_FRAME_BUDGET", "").strip()
     if override:
         try:
@@ -276,8 +306,11 @@ def _track_frame_budget():
     limit = _memory_limit_bytes()
     if limit is None:
         return DEFAULT_FRAME_BUDGET
-    affordable = int(limit * FRAME_BUDGET_SHARE) // FRAME_TENSOR_BYTES
-    return max(MIN_FRAME_BUDGET, affordable)
+    if reserved_bytes is None:
+        affordable = int(limit * STARTUP_FRAME_BUDGET_SHARE)
+    else:
+        affordable = int(max(0, limit - reserved_bytes) * FREE_MEMORY_SHARE)
+    return max(MIN_FRAME_BUDGET, affordable // FRAME_TENSOR_BYTES)
 
 
 TRACK_FRAME_BUDGET = _track_frame_budget()
@@ -301,17 +334,31 @@ class _FrameBudget:
         with self._cv:
             return self._in_flight
 
+    @property
+    def budget(self):
+        with self._cv:
+            return self._budget
+
+    def set_budget(self, frames):
+        """Re-size the bound. Waiters re-check themselves against the new one."""
+        with self._cv:
+            self._budget = frames
+            self._cv.notify_all()
+
     @contextmanager
     def hold(self, frames, log_extra=None):
-        # A request larger than the whole budget still has to run, or it would
-        # wait for room that can never exist. It waits for an idle session and
-        # then runs on its own.
-        need = min(frames, self._budget)
         extra = dict(log_extra or {})
         waited = 0.0
 
+        def fits():
+            # A request larger than the whole budget still has to run, or it
+            # would wait for room that can never exist. It waits for an idle
+            # session and then runs on its own. Read under the lock, and each
+            # time: the budget is re-sized once the model is loaded.
+            return self._in_flight + min(frames, self._budget) <= self._budget
+
         with self._cv:
-            if self._in_flight + need > self._budget:
+            if not fits():
                 sly.logger.info(
                     "Tracking is at capacity, waiting for room",
                     extra={
@@ -322,10 +369,7 @@ class _FrameBudget:
                     },
                 )
                 started = time.monotonic()
-                admitted = self._cv.wait_for(
-                    lambda: self._in_flight + need <= self._budget,
-                    timeout=FRAME_WAIT_TIMEOUT_S,
-                )
+                admitted = self._cv.wait_for(fits, timeout=FRAME_WAIT_TIMEOUT_S)
                 if not admitted:
                     raise RuntimeError(
                         f"Timed out after {FRAME_WAIT_TIMEOUT_S}s waiting to track "
@@ -352,15 +396,45 @@ class _FrameBudget:
 
 FRAME_BUDGET = _FrameBudget(TRACK_FRAME_BUDGET)
 
-# Said out loud at startup: anyone reading an OOM-killed session's log needs to
-# know what it thought its budget was, and this is the only place that shows
+# Said out loud, both times: anyone reading an OOM-killed session's log needs
+# to know what it thought its budget was, and this is the only place that shows
 # whether the container's limit was read or a fallback quietly applied.
 sly.logger.info(
-    "Tracking frame budget: %d frames (~%.2f GiB at %d MiB per frame)",
+    "Tracking frame budget before the model is loaded: %d frames "
+    "(~%.2f GiB at %d MiB per frame)",
     TRACK_FRAME_BUDGET,
     TRACK_FRAME_BUDGET * FRAME_TENSOR_BYTES / (1024 ** 3),
     FRAME_TENSOR_BYTES // (1024 * 1024),
 )
+
+
+def recalibrate_frame_budget():
+    """Re-size the budget against the memory the loaded model actually left.
+
+    Called once the weights are on the device. Everything the session holds
+    before a single frame is loaded is measurable by then, where at import time
+    it could only be guessed at -- and guessing at it is what left an 8 G
+    session a budget it could not afford.
+    """
+    reserved = _process_rss_bytes()
+    if reserved is None:
+        sly.logger.warning(
+            "Could not read this process's resident memory; keeping the "
+            "startup tracking frame budget of %d frames",
+            FRAME_BUDGET.budget,
+        )
+        return
+
+    budget = _track_frame_budget(reserved_bytes=reserved)
+    FRAME_BUDGET.set_budget(budget)
+    sly.logger.info(
+        "Tracking frame budget: %d frames (~%.2f GiB at %d MiB per frame), "
+        "from %.2f GiB left of the session's memory",
+        budget,
+        budget * FRAME_TENSOR_BYTES / (1024 ** 3),
+        FRAME_TENSOR_BYTES // (1024 * 1024),
+        reserved / (1024 ** 3),
+    )
 
 
 def _bounded_by_frame_budget(method):
@@ -535,6 +609,11 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         # TODO: add maxsize after discuss
         self._inference_image_cache = Cache(ttl=60)
         self._init_mask_cache = LRUCache(maxsize=100)  # cache of sly.Bitmaps
+
+        # The model is what tracking has to share the container with, so the
+        # budget is sized here rather than at import, where it is not loaded
+        # yet.
+        recalibrate_frame_budget()
 
     def get_info(self):
         info = super().get_info()
