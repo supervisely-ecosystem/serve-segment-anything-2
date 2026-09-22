@@ -534,7 +534,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         # TODO: add maxsize after discuss
         self._inference_image_cache = Cache(ttl=60)
-        self._init_mask_cache = LRUCache(maxsize=100)  # cache of sly.Bitmaps
+        # Geometry each Smart Tool session started from, by figure id: the tool sends it
+        # with the first request of the session only.
+        self._init_mask_cache = LRUCache(maxsize=100)
 
     def get_info(self):
         info = super().get_info()
@@ -1860,25 +1862,16 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 image_np = image_np[0]
             sly_image.write(image_path, image_np)
 
-            # Prepare init_mask (only for images)
-            figure_id = smtool_state.get("figure_id")
-            image_id = smtool_state.get("image_id")
-            if smtool_state.get("init_figure") is True and image_id is not None:
-                # Download and save in Cache
-                init_mask = functional.download_init_mask(api, figure_id, image_id)
-                self._init_mask_cache[figure_id] = init_mask
-            elif self._init_mask_cache.get(figure_id) is not None:
-                # Load from Cache
-                init_mask = self._init_mask_cache[figure_id]
-            else:
-                init_mask = None
-            if init_mask is not None:
-                image_info = api.image.get_info_by_id(image_id)
-                init_mask = functional.bitmap_to_mask(
-                    init_mask, image_info.height, image_info.width
-                )
-                # init_mask = functional.crop_image(crop, init_mask)
-                assert init_mask.shape[:2] == image_np.shape[:2]
+            # The figure this Smart Tool session is refining, rasterized to the size of
+            # the image being annotated. The request carries the figure itself, so its
+            # shape does not matter: a polygon, a multipolygon or an Any Shape figure is
+            # sent back to the model the same way a mask is.
+            init_mask = functional.get_smart_tool_init_mask(
+                smtool_state,
+                image_np.shape[:2],
+                api=api,
+                cache=self._init_mask_cache,
+            )
             settings["init_mask"] = init_mask
 
             self._inference_image_lock.acquire()

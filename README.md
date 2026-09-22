@@ -75,6 +75,25 @@ Fast labeling of images batch via [Batched Smart Tool](https://ecosystem.supervi
     <source src="https://github.com/supervisely-ecosystem/serve-segment-anything-2/releases/download/v0.0.1/sam2_batched_smart_tool.mp4" type="video/mp4">
 </video>
 
+# Editing an existing figure
+
+"Edit via Smart Tool" re-opens a figure the model produced earlier. The
+`/smart_segmentation` request carries that figure with the first click of the session:
+
+```json
+"mask": { "geometry_type": "polygon", "geometry": { "points": { "exterior": [], "interior": [] } } }
+```
+
+`geometry_type` is the Supervisely geometry name and `geometry` its JSON, exactly as the
+figure is stored — mask, polygon or multipolygon. The app rasterizes it to the size of the
+image and feeds it to SAM 2 as the mask prompt, so any of those shapes can be refined; the
+answer is a raster mask either way, and the platform writes it back in the figure's own
+shape. The clicks that follow send the figure id alone and reuse it.
+
+The older `figure_id` + `init_figure` pair is still accepted, and still resolves the figure
+by downloading the image annotation and reading it as a bitmap, which is why it never
+worked for anything but masks. It is deprecated; senders should use `mask`.
+
 # Controls
 
 | Key                                                           | Description                               |
