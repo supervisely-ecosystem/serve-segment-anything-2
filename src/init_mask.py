@@ -1,93 +1,58 @@
-"""The Smart Tool's init mask: the mask of the figure that is being refined.
+"""The init mask of a Smart Tool request.
 
-The app needs that mask as ``settings["init_mask"]``. Historically the request
-only named the figure -- ``figure_id`` plus ``init_figure`` -- and the app
-resolved it by downloading the image annotation and parsing the label back as a
-``sly.Bitmap``. That restricts refinement to bitmap figures: a polygon,
-multipolygon or AnyShape label cannot be parsed as a bitmap at all.
+The canonical implementation is ``get_init_mask_from_context`` in the Supervisely
+SDK (``supervisely/nn/inference/interactive_segmentation/functional.py``). This
+app cannot import it: ``docker/Dockerfile`` installs
+``supervisely[video-av]==6.74.36`` and ``config.json`` pins
+``supervisely/segment-anything-2:1.0.21``, both of which predate that helper, so
+it is mirrored here -- same field names, same origin convention, same decoding,
+same error behaviour -- on top of APIs the pinned SDK already has. Keep the two
+in step; when the pin moves past the release that carries the helper, drop this
+module and import the SDK one.
 
-The platform now sends the figure's mask inline instead::
-
-    "mask": {"data": <base64 string>, "origin": {"x": <int>, "y": <int>}}
-
-``data`` is the encoding ``sly.Bitmap`` already uses on the wire (base64 of a
-zlib-compressed PNG whose non-zero pixels are foreground, what
-``sly.Bitmap.data_2_base64`` writes) and ``origin`` is the top-left corner of
-the mask in full-image pixel coordinates, column (``x``) and row (``y``).
-
-When the field is present it is authoritative: the init mask is built from it
-alone, nothing is resolved through the API, and a mask that cannot be decoded is
-a bad request rather than a silent fall back to the deprecated download.
+The app needs the mask of the figure being refined as ``settings["init_mask"]``.
+Historically the request only named the figure (``figure_id`` plus
+``init_figure``) and the app resolved it by downloading the image annotation and
+parsing the label back as a ``sly.Bitmap``, which only ever worked for bitmap
+figures. The platform now sends the mask itself, so a polygon, multipolygon or
+AnyShape figure can be handed back to the model as well.
 """
 
-from typing import Any, Dict, Optional
+from typing import Optional
 
-import numpy as np
 import supervisely as sly
-from supervisely.nn.inference.interactive_segmentation import functional
-
-MASK_FIELD = "mask"
 
 
-class InitMaskError(ValueError):
-    """The request carries a ``mask`` field that cannot be used as an init mask."""
+class InitMaskDecodeError(ValueError):
+    """Request context carries an init ``mask`` that cannot be decoded."""
 
 
-def init_bitmap_from_request(context: Dict[str, Any]) -> Optional[sly.Bitmap]:
-    """Decode ``context["mask"]`` into the geometry the figure was drawn with.
+def get_init_mask_from_context(context: dict) -> Optional[sly.Bitmap]:
+    """Build the init mask bitmap from the ``mask`` field of the request context.
 
-    Returns ``None`` when the request carries no inline mask, in which case the
-    caller falls back to the deprecated ``figure_id`` path. Raises
-    :class:`InitMaskError` when a mask is present but unusable.
+    The field is optional and has the form
+    ``{"data": <base64 string>, "origin": {"x": <int>, "y": <int>}}``, where
+    ``data`` is the same encoding ``sly.Bitmap`` uses on the wire (base64 of a
+    zlib-compressed PNG, non-zero pixels are foreground) and ``origin`` is the
+    top-left corner of the mask in full image coordinates. When it is present it
+    fully replaces the deprecated ``figure_id`` lookup, so no annotation is
+    downloaded and figures of any geometry can be sent back.
+
+    :param context: Request context of a smart tool request.
+    :type context: dict
+    :returns: Bitmap built from the context, or None if there is no ``mask``.
+    :rtype: :class:`supervisely.Bitmap` or None
+    :raises InitMaskDecodeError: if ``mask`` is present but cannot be decoded.
     """
-    mask = context.get(MASK_FIELD)
+    mask = context.get("mask")
     if mask is None:
         return None
-    if not isinstance(mask, dict):
-        raise InitMaskError(f"'{MASK_FIELD}' must be an object with 'data' and 'origin'.")
-    data = mask.get("data")
-    if not isinstance(data, str) or data == "":
-        raise InitMaskError(f"'{MASK_FIELD}.data' must be a non-empty base64 string.")
-    row, col = _origin_row_col(mask.get("origin"))
     try:
-        # The same decoding sly.Bitmap.from_json applies to a stored figure, so
-        # the geometry is indistinguishable from a downloaded one.
-        decoded = sly.Bitmap.base64_2_data(data)
-        return sly.Bitmap(decoded, origin=sly.PointLocation(row=row, col=col))
+        origin = mask["origin"]
+        data = sly.Bitmap.base64_2_data(mask["data"])
+        return sly.Bitmap(
+            data=data,
+            origin=sly.PointLocation(row=int(origin["y"]), col=int(origin["x"])),
+        )
     except Exception as exc:
-        raise InitMaskError(
-            f"'{MASK_FIELD}.data' is not a decodable bitmap mask: {exc}"
-        ) from exc
-
-
-def build_init_mask(bitmap: sly.Bitmap, height: int, width: int) -> np.ndarray:
-    """Rasterize the figure's mask onto the full inference image.
-
-    Produces exactly what the ``figure_id`` path produces for the equivalent
-    bitmap figure: an ``(height, width)`` ``uint8`` array with 0 outside and 255
-    inside the figure.
-    """
-    bbox = bitmap.to_bbox()
-    if bbox.top < 0 or bbox.left < 0 or bbox.bottom >= height or bbox.right >= width:
-        raise InitMaskError(
-            f"'{MASK_FIELD}' does not fit the image: mask at rows "
-            f"{bbox.top}-{bbox.bottom}, columns {bbox.left}-{bbox.right} "
-            f"in a {height}x{width} image."
-        )
-    return functional.bitmap_to_mask(bitmap, height, width)
-
-
-def _origin_row_col(origin: Any) -> tuple:
-    if not isinstance(origin, dict):
-        raise InitMaskError(
-            f"'{MASK_FIELD}.origin' must be an object with integer 'x' and 'y'."
-        )
-    try:
-        col, row = int(origin["x"]), int(origin["y"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise InitMaskError(
-            f"'{MASK_FIELD}.origin' must be an object with integer 'x' and 'y'."
-        ) from exc
-    if row < 0 or col < 0:
-        raise InitMaskError(f"'{MASK_FIELD}.origin' must not be negative.")
-    return row, col
+        raise InitMaskDecodeError(f"Can not decode the init mask from request: {exc}") from exc

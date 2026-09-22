@@ -1,8 +1,8 @@
-"""Offline regressions for the init mask of the app's /smart_segmentation route.
+"""Offline checks for the init mask of the app's /smart_segmentation route.
 
 The route is driven directly with a pre-seeded image cache and a stubbed
-predictor, so these tests are CPU-only geometry and transport checks: no SAM 2
-weights are loaded, no inference runs and no server is contacted.
+predictor, so these are CPU-only geometry and transport checks: no SAM 2 weights
+are loaded, no inference runs and no server is contacted.
 """
 
 import os
@@ -21,7 +21,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# The app module builds its GUI and registers its routes at import time.
+# The app module builds its GUI and registers its routes at import time. TASK_ID
+# is deliberately left unset: with it the app asks the platform for its task on
+# import, and there is no platform here.
 os.environ.setdefault("SERVER_ADDRESS", "http://localhost:8000")
 os.environ.setdefault("API_TOKEN", "0" * 32)
 os.environ.setdefault("TEAM_ID", "1")
@@ -45,8 +47,7 @@ def _figure_bitmap() -> sly.Bitmap:
     data[1:10, 2:11] = True
     data[4:7, 5:8] = False
     return sly.Bitmap(
-        data,
-        origin=sly.PointLocation(row=FIGURE_ORIGIN_ROW, col=FIGURE_ORIGIN_COL),
+        data, origin=sly.PointLocation(row=FIGURE_ORIGIN_ROW, col=FIGURE_ORIGIN_COL)
     )
 
 
@@ -73,7 +74,7 @@ def _context(**overrides) -> dict:
 
 
 class _RecordingApi:
-    """Serves the deprecated figure_id path and records what it asked for."""
+    """Serves the deprecated figure_id path and records what it was asked for."""
 
     def __init__(self):
         self.calls = []
@@ -97,26 +98,25 @@ class _ForbiddenApi:
 
 
 @pytest.fixture(scope="module")
-def route():
+def routes():
     server = app_main.m.app.get_server()
-    endpoints = [
-        r.endpoint for r in server.routes if getattr(r, "path", None) == "/smart_segmentation"
-    ]
-    assert len(endpoints) == 1, "expected exactly one /smart_segmentation route"
-    return endpoints[0]
+    return {r.path: r.endpoint for r in server.routes if hasattr(r, "endpoint")}
 
 
 @pytest.fixture
-def serve_request(route, monkeypatch):
+def serve_request(routes, monkeypatch):
+    route = routes["/smart_segmentation"]
     model = app_main.m
-    # load_on_device() sets up the smart tool state together with the weights;
+    # load_on_device() sets the smart tool state up together with the weights;
     # only the state is needed here, and loading SAM 2 would need a GPU.
     monkeypatch.setattr(model, "_inference_image_lock", threading.Lock(), raising=False)
     monkeypatch.setattr(model, "_init_mask_cache", LRUCache(maxsize=100), raising=False)
-    # The route only downloads the image when it is not cached; caching it keeps
+    # The route downloads the image only when it is not cached; caching it keeps
     # the request offline without stubbing the download itself.
     image_cache = Cache(ttl=60)
-    image_cache.set(str(IMAGE_ID), np.full((IMAGE_HEIGHT, IMAGE_WIDTH, 3), 128, np.uint8))
+    image_cache.set(
+        str(IMAGE_ID), np.full((IMAGE_HEIGHT, IMAGE_WIDTH, 3), 128, np.uint8)
+    )
     monkeypatch.setattr(model, "_inference_image_cache", image_cache, raising=False)
 
     predicted = np.zeros((IMAGE_HEIGHT, IMAGE_WIDTH), bool)
@@ -141,7 +141,9 @@ def serve_request(route, monkeypatch):
     return run
 
 
-def test_inline_mask_is_served_without_api_and_matches_the_figure_download(serve_request):
+def test_inline_mask_is_served_without_api_and_matches_the_figure_download(
+    serve_request,
+):
     """`mask` yields the array the figure_id path yields, with no API access."""
     api = _RecordingApi()
     _, legacy_payload, legacy_settings = serve_request(
@@ -162,8 +164,24 @@ def test_inline_mask_is_served_without_api_and_matches_the_figure_download(serve
     inline_mask = inline_settings["init_mask"]
     assert inline_mask is not None
     assert inline_mask.shape == legacy_mask.shape == (IMAGE_HEIGHT, IMAGE_WIDTH)
-    assert inline_mask.dtype == legacy_mask.dtype
+    assert inline_mask.dtype == legacy_mask.dtype == np.uint8
+    assert set(np.unique(inline_mask)) == {0, 255}
     np.testing.assert_array_equal(inline_mask, legacy_mask)
+
+
+def test_legacy_request_without_mask_still_uses_the_download_then_the_cache(
+    serve_request,
+):
+    api = _RecordingApi()
+    _, _, first = serve_request(_context(figure_id=FIGURE_ID, init_figure=True), api)
+    _, _, repeat = serve_request(_context(figure_id=FIGURE_ID), api)
+    assert [call for call, _ in api.calls] == [
+        "annotation.download_json",
+        "image.get_info_by_id",
+        # The repeat request reuses the cached figure and only asks for the size.
+        "image.get_info_by_id",
+    ]
+    np.testing.assert_array_equal(repeat["init_mask"], first["init_mask"])
 
 
 @pytest.mark.parametrize(
@@ -186,3 +204,24 @@ def test_unusable_mask_is_a_bad_request_and_never_falls_back(serve_request, mask
     assert payload["success"] is False
     assert api.calls == []
     assert settings is None, "a bad request must not reach the predictor"
+
+
+def test_batch_wrapper_forwards_the_mask_to_the_route(routes, monkeypatch):
+    """The batch wrappers re-enter /smart_segmentation with the context as sent."""
+    forwarded = []
+    monkeypatch.setenv("TASK_ID", "1")
+
+    def fake_send_request(session_id, endpoint, data, context, **kwargs):
+        forwarded.append((endpoint, context))
+        return {"success": True}
+
+    monkeypatch.setattr(
+        app_main.api, "task", SimpleNamespace(send_request=fake_send_request)
+    )
+    context = _context(mask=_mask_field())
+    request = SimpleNamespace(
+        state=SimpleNamespace(context={"states": [context]}, state={})
+    )
+    routes["/smart_segmentation_batch"](request=request)
+
+    assert forwarded == [("smart_segmentation", context)]

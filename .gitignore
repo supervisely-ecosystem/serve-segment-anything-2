@@ -8,5 +8,6 @@ app_data/
 train/tempfiles/
 tests/*
 !tests/unit/
+.venv-offline-checks/
 test_results/
 debug.env

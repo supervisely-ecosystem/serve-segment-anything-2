@@ -68,7 +68,7 @@ from supervisely.nn.inference.inference import (
 )
 from supervisely.volume_annotation.volume_annotation import Plane
 
-from src.init_mask import InitMaskError, build_init_mask, init_bitmap_from_request
+from src.init_mask import get_init_mask_from_context
 
 
 load_dotenv("supervisely.env")
@@ -934,7 +934,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                     n_frames + 1,
                     extra={**log_extra},
                 )
-                progress.iter_done()
+                progress.iter_done_report()
 
         try:
             # save frames to directory
@@ -1051,7 +1051,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         if len(items) > 0:
                             for item in items:
                                 upload_f(*item[:3])
-                            progress.iters_done(sum(1 for item in items if item[3]))
+                            uploaded_cnt = sum(1 for item in items if item[3])
+                            if uploaded_cnt > 0:
+                                progress.iters_done_report(uploaded_cnt)
                             continue
                         if stop_event.is_set():
                             api.video.notify_progress(
@@ -1576,10 +1578,15 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
 
         @server.post("/smart_segmentation")
         def smart_segmentation(response: Response, request: Request):
-            # 1. parse request
-            # 2. download image
-            # 3. make crop
-            # 4. predict
+            """Run the smart tool on one image.
+
+            The init mask is taken from the request context field ``mask``
+            (see :func:`src.init_mask.get_init_mask_from_context`). A present but
+            undecodable ``mask`` is answered with 400 Bad Request. When it is
+            absent, the deprecated ``figure_id``/``init_figure`` fields are used
+            instead, which downloads the image annotation and only supports
+            bitmap figures.
+            """
 
             logger.debug(
                 f"smart_segmentation inference: context=",
@@ -1592,6 +1599,7 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 smtool_state = request.state.context
                 self.process_volume = smtool_state.get("volume") is not None
                 api = request.state.api
+                init_mask_bitmap = get_init_mask_from_context(smtool_state)
                 crop = smtool_state.get("crop")
                 positive_clicks, negative_clicks = (
                     smtool_state["positive"],
@@ -1666,29 +1674,16 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 image_np = image_np[0]
             sly_image.write(image_path, image_np)
 
-            # Prepare init_mask (only for images).
-            #
-            # A request that carries the figure's mask inline is authoritative:
-            # the init mask is built from it and nothing is resolved through the
-            # API. `figure_id`/`init_figure` stay accepted but are deprecated
-            # for this purpose -- they resolve the figure through the image
-            # annotation, which only ever worked for bitmap figures.
+            # Prepare init_mask (only for images)
             figure_id = smtool_state.get("figure_id")
             image_id = smtool_state.get("image_id")
-            try:
-                init_bitmap = init_bitmap_from_request(smtool_state)
-                if init_bitmap is not None:
-                    if figure_id is not None:
-                        self._init_mask_cache[figure_id] = init_bitmap
-                    init_mask = build_init_mask(init_bitmap, *image_np.shape[:2])
-            except InitMaskError as exc:
-                # Never fall back to the deprecated download: the client asked
-                # for a specific mask to be refined, so a broken one is an
-                # error rather than a reason to refine a different mask.
-                logger.warn(f"Invalid init mask in request: {exc}", exc_info=True)
-                response.status_code = status.HTTP_400_BAD_REQUEST
-                return {"message": f"400: Bad request. {exc}", "success": False}
-            if init_bitmap is None:
+            if init_mask_bitmap is not None:
+                # The request carries the mask itself: no annotation download,
+                # no figure lookup, works for any geometry of the edited figure.
+                h, w = image_np.shape[:2]
+                init_mask = functional.bitmap_to_mask(init_mask_bitmap, h, w)
+            else:
+                # Deprecated: resolve the mask from the figure id.
                 if smtool_state.get("init_figure") is True and image_id is not None:
                     # Download and save in Cache
                     init_mask = functional.download_init_mask(api, figure_id, image_id)
@@ -1704,7 +1699,8 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                         init_mask, image_info.height, image_info.width
                     )
                     # init_mask = functional.crop_image(crop, init_mask)
-                    assert init_mask.shape[:2] == image_np.shape[:2]
+            if init_mask is not None:
+                assert init_mask.shape[:2] == image_np.shape[:2]
             settings["init_mask"] = init_mask
 
             self._inference_image_lock.acquire()
