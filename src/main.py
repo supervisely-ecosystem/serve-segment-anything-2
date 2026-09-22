@@ -210,25 +210,21 @@ LOAD_FRAMES_ASYNC = False
 # in flight were killed, 310 survived.
 FRAME_TENSOR_BYTES = 3 * 1024 * 1024 * 4  # float32 CHW at SAM2's image_size
 
-# How much of the memory left after the model is loaded frame tensors may
-# claim. What is left is measured rather than assumed: a budget taken as a
-# fixed 0.55 of the whole limit left an 8 G session ~0.2 GiB of headroom,
-# because the weights, the CUDA host allocations and the allocator's retained
-# arenas are 3.1-3.2 GiB there and no share of the limit can know that. It was
-# OOM-killed again at ~345 frames -- inside its own budget.
-#
-# The rest is held back for what this still does not count: the per-object
-# inference state, which init_state() offloads to host RAM as well, the JPEGs
-# on their way in, and the peaks between a frame stack being allocated and the
-# track that owns it releasing it.
-FREE_MEMORY_SHARE = 0.6
+# How much of the whole limit frame tensors may claim. 0.55 was too much: the
+# weights, the CUDA host allocations and the allocator's retained arenas are
+# 3.1-3.2 GiB on an 8 G session, so a full budget sat ~0.2 GiB under the limit
+# and the session was OOM-killed again at ~345 frames -- inside its own budget.
+# The rest is held back for what this does not count: the per-object inference
+# state, which init_state() offloads to host RAM as well, the JPEGs on their
+# way in, and the peaks between a frame stack being allocated and the track
+# that owns it releasing it.
+FRAME_BUDGET_SHARE = 0.35
 
-# Used until the model is loaded, when there is nothing to measure -- and as
-# the fallback if the measurement cannot be taken at all. Nothing can track
-# before the model is loaded, so this only has to be safe, not accurate: it is
-# roughly where the measured budget lands on the 8 G sessions this was sized
-# against.
-STARTUP_FRAME_BUDGET_SHARE = 0.35
+# And of what the session actually has left once the model is loaded, which is
+# the other half of the sizing: a share of the limit cannot know what a
+# particular model and image cost. Whichever of the two is smaller wins, so
+# this can only ever lower the budget.
+FREE_MEMORY_SHARE = 0.6
 
 # When neither a cgroup limit nor MemTotal can be read.
 DEFAULT_FRAME_BUDGET = 256
@@ -275,8 +271,23 @@ def _memory_limit_bytes():
     return None
 
 
-def _process_rss_bytes():
-    """Resident memory this process holds right now, or None if unreadable."""
+def _memory_in_use_bytes():
+    """What the session is holding right now, counted the way the limit is.
+
+    The cgroup's own figure where there is one, because that is what the
+    kernel compares against memory.max when it decides to kill; this process's
+    resident memory otherwise, which undercounts it.
+    """
+    for source in (
+        "/sys/fs/cgroup/memory.current",  # cgroup v2
+        "/sys/fs/cgroup/memory/memory.usage_in_bytes",  # cgroup v1
+    ):
+        try:
+            with open(source) as usage_file:
+                return int(usage_file.read().strip())
+        except (OSError, ValueError):
+            continue
+
     try:
         with open("/proc/self/status") as status:
             for line in status:
@@ -287,12 +298,12 @@ def _process_rss_bytes():
     return None
 
 
-def _track_frame_budget(reserved_bytes=None):
+def _track_frame_budget(in_use_bytes=None):
     """Frames all in-flight tracks may hold between them.
 
-    `reserved_bytes` is what the process already holds and will not give back
-    -- the loaded model, mostly. Before it is known, the budget falls back to a
-    conservative share of the whole limit.
+    `in_use_bytes` is what the session already holds with no track running --
+    the model, mostly. It is measured once the weights are loaded; until then
+    the budget is the share of the limit alone.
     """
     override = os.environ.get("SLY_TRACK_FRAME_BUDGET", "").strip()
     if override:
@@ -306,10 +317,11 @@ def _track_frame_budget(reserved_bytes=None):
     limit = _memory_limit_bytes()
     if limit is None:
         return DEFAULT_FRAME_BUDGET
-    if reserved_bytes is None:
-        affordable = int(limit * STARTUP_FRAME_BUDGET_SHARE)
-    else:
-        affordable = int(max(0, limit - reserved_bytes) * FREE_MEMORY_SHARE)
+    affordable = int(limit * FRAME_BUDGET_SHARE)
+    if in_use_bytes is not None:
+        affordable = min(
+            affordable, int(max(0, limit - in_use_bytes) * FREE_MEMORY_SHARE)
+        )
     return max(MIN_FRAME_BUDGET, affordable // FRAME_TENSOR_BYTES)
 
 
@@ -409,31 +421,34 @@ sly.logger.info(
 
 
 def recalibrate_frame_budget():
-    """Re-size the budget against the memory the loaded model actually left.
+    """Lower the budget to what the loaded model actually left, if it is less.
 
-    Called once the weights are on the device. Everything the session holds
-    before a single frame is loaded is measurable by then, where at import time
-    it could only be guessed at -- and guessing at it is what left an 8 G
-    session a budget it could not afford.
+    Called once the weights are on the device, which is the earliest the cost
+    of this particular model and image is a measurement rather than a guess.
+    It is still only a floor -- CUDA host allocations and allocator arenas grow
+    past it once inference runs -- so it lowers the budget and never raises it
+    above the share of the limit.
     """
-    reserved = _process_rss_bytes()
-    if reserved is None:
+    in_use = _memory_in_use_bytes()
+    limit = _memory_limit_bytes()
+    if in_use is None or limit is None:
         sly.logger.warning(
-            "Could not read this process's resident memory; keeping the "
-            "startup tracking frame budget of %d frames",
+            "Could not measure what this session is holding; keeping the "
+            "tracking frame budget of %d frames",
             FRAME_BUDGET.budget,
         )
         return
 
-    budget = _track_frame_budget(reserved_bytes=reserved)
+    budget = _track_frame_budget(in_use_bytes=in_use)
     FRAME_BUDGET.set_budget(budget)
     sly.logger.info(
-        "Tracking frame budget: %d frames (~%.2f GiB at %d MiB per frame), "
-        "from %.2f GiB left of the session's memory",
+        "Tracking frame budget: %d frames (~%.2f GiB at %d MiB per frame); "
+        "%.2f GiB of the session's %.2f GiB is in use with no track running",
         budget,
         budget * FRAME_TENSOR_BYTES / (1024 ** 3),
         FRAME_TENSOR_BYTES // (1024 * 1024),
-        reserved / (1024 ** 3),
+        in_use / (1024 ** 3),
+        limit / (1024 ** 3),
     )
 
 
