@@ -6,6 +6,8 @@ frames/
 app_data/
 .venv/
 train/tempfiles/
-tests/
+tests/*
+!tests/unit/
+.venv-offline-checks/
 test_results/
 debug.env
