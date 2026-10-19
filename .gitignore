@@ -3,6 +3,7 @@ supervisely.env
 **/__pycache__/
 prompts/
 frames/
+frame_cache/
 app_data/
 .venv/
 train/tempfiles/

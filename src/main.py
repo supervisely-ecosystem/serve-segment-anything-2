@@ -167,7 +167,8 @@ class VideoFrameCache:
                 self._bytes -= old_size
 
 
-FRAME_CACHE = VideoFrameCache("frames/cache", max_bytes=1 << 30)
+# Outside `frames/`, which the debug startup and shutdown remove whole.
+FRAME_CACHE = VideoFrameCache("frame_cache", max_bytes=1 << 30)
 
 # Frames past the requested range to stream and cache along with it, in the
 # direction of the track, so the next chunks of a chunked track are served
@@ -219,6 +220,11 @@ def download_frames_to_paths(cache, api, video_id, frame_indexes, paths, progres
         written.add(frame_index)
         if progress_cb is not None:
             progress_cb()
+
+    # The cache is shared by every caller of the session, and a hit makes no
+    # request with the caller's token, so check they can read the video first.
+    # Raises for a video that is missing or not theirs.
+    api.video.get_info_by_id(video_id, raise_error=True)
 
     for frame_index in indexes:
         if FRAME_CACHE.link_to(video_id, frame_index, _dst(frame_index)):
@@ -2432,6 +2438,7 @@ def clean_data():
     # delete app data since it is no longer needed
     sly.fs.remove_dir("prompts")
     sly.fs.remove_dir("frames")
+    sly.fs.remove_dir("frame_cache")
     sly.logger.info("Successfully cleaned unnecessary app data")
 
 
