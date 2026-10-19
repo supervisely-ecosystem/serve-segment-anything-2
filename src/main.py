@@ -30,9 +30,11 @@ import json
 import os
 import re
 import pathlib
+import shutil
 import threading
 import time
 import traceback
+from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 from queue import Queue, Empty
@@ -99,6 +101,81 @@ def get_plane_name(normal):
         return "Unknown"
 
 
+class VideoFrameCache:
+    """Decoded frames on local disk, shared by every track the session runs.
+
+    Streaming even a few frames demuxes the video from its first packet up to
+    the last frame asked for, so every request near the end of a long video
+    downloads nearly all of it. Without a cache, a client that sends the same
+    chunk again -- or the next chunk of the same track -- pays that again.
+
+    Frames are written once as the JPEG a track reads and hard-linked into each
+    track's directory, so a track sees the same bytes whether it streamed them
+    or not, and evicting a frame never pulls it from under a running track.
+    Video files do not change under a video id, so entries are never stale.
+    """
+
+    def __init__(self, root: str, max_bytes: int):
+        self._root = root
+        self._max_bytes = max_bytes
+        self._lock = threading.Lock()
+        self._sizes: "OrderedDict[tuple, int]" = OrderedDict()  # LRU first
+        self._bytes = 0
+        # The index lives in memory, so files left by a previous process are
+        # unaccounted for.
+        remove_dir(root)
+        mkdir(root)
+
+    def _path(self, video_id: int, frame_index: int) -> str:
+        return os.path.join(self._root, str(video_id), f"{frame_index}.jpg")
+
+    @staticmethod
+    def _link(src: str, dst: str):
+        try:
+            os.link(src, dst)
+        except OSError:
+            shutil.copyfile(src, dst)
+
+    def link_to(self, video_id: int, frame_index: int, dst: str) -> bool:
+        """Put the cached frame at `dst`. False when it is not cached."""
+        key = (video_id, frame_index)
+        with self._lock:
+            if key not in self._sizes:
+                return False
+            self._sizes.move_to_end(key)
+            self._link(self._path(video_id, frame_index), dst)
+            return True
+
+    def put(self, video_id: int, frame_index: int, image: np.ndarray, link_to: str = None):
+        """Cache a frame, and put it at `link_to` before it can be evicted."""
+        path = self._path(video_id, frame_index)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # The extension picks the encoder, so the temporary name keeps it.
+        tmp_path = f"{path}.{rand_str(8)}.jpg"
+        sly_image.write(tmp_path, image)
+        size = os.path.getsize(tmp_path)
+        key = (video_id, frame_index)
+        with self._lock:
+            os.replace(tmp_path, path)
+            if link_to is not None:
+                self._link(path, link_to)
+            self._bytes += size - self._sizes.pop(key, 0)
+            self._sizes[key] = size
+            while self._bytes > self._max_bytes and len(self._sizes) > 1:
+                (old_video_id, old_frame_index), old_size = self._sizes.popitem(last=False)
+                silent_remove(self._path(old_video_id, old_frame_index))
+                self._bytes -= old_size
+
+
+FRAME_CACHE = VideoFrameCache("frames/cache", max_bytes=1 << 30)
+
+# Frames past the requested range to stream and cache along with it, in the
+# direction of the track, so the next chunks of a chunked track are served
+# from disk. Demuxing already reads 64 packets past the range, so this adds
+# little download, only decode time.
+FRAME_READ_AHEAD = 32
+
+
 def download_frames_to_paths(cache, api, video_id, frame_indexes, paths, progress_cb=None):
     """Write the frames a track needs, streamed and decoded from the video.
 
@@ -135,6 +212,28 @@ def download_frames_to_paths(cache, api, video_id, frame_indexes, paths, progres
     destination = str(pathlib.Path(paths[0]).parent)
     written = set()
 
+    def _dst(frame_index):
+        return os.path.join(destination, f"{position_of[frame_index]}.jpg")
+
+    def _placed(frame_index):
+        written.add(frame_index)
+        if progress_cb is not None:
+            progress_cb()
+
+    for frame_index in indexes:
+        if FRAME_CACHE.link_to(video_id, frame_index, _dst(frame_index)):
+            _placed(frame_index)
+
+    to_stream = [i for i in indexes if i not in written]
+    if not to_stream:
+        return
+    start, end = min(to_stream), max(to_stream)
+    if indexes[-1] < indexes[0]:
+        start = max(0, start - FRAME_READ_AHEAD)
+    else:
+        # Past the last frame of the video the SDK stops at the last frame.
+        end += FRAME_READ_AHEAD
+
     def _write(sdk_path, image):
         # The SDK puts the real frame index in the name it chose; that is the
         # only place it is available to a writer.
@@ -142,23 +241,17 @@ def download_frames_to_paths(cache, api, video_id, frame_indexes, paths, progres
         if match is None:
             return
         frame_index = int(match.group(1))
-        position = position_of.get(frame_index)
-        if position is None:
-            # Outside the requested range. Streaming is inclusive at both ends,
-            # so this should not happen, and silently writing it would leave a
-            # file SAM2 would then try to track.
-            return
-        sly_image.write(os.path.join(destination, f"{position}.jpg"), image)
-        written.add(frame_index)
-        if progress_cb is not None:
-            progress_cb()
+        wanted = frame_index in position_of and frame_index not in written
+        FRAME_CACHE.put(video_id, frame_index, image, link_to=_dst(frame_index) if wanted else None)
+        if wanted:
+            _placed(frame_index)
 
     stream_video_frames_to_dir(
         api,
         video_id,
         destination,
-        start=min(indexes),
-        end=max(indexes),
+        start=start,
+        end=end,
         ext="jpg",
         image_writer=_write,
     )
@@ -1049,6 +1142,16 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         # save frames to directory
         api.logger.debug("Saving frames to directory...", extra=log_extra)
         mkdir(temp_frames_dir, remove_content_if_exists=True)
+        try:
+            return self._track_api_frames(
+                api, video_id, frames_indexes, n_frames, input_geometries, temp_frames_dir, log_extra
+            )
+        finally:
+            remove_dir(temp_frames_dir)
+
+    def _track_api_frames(
+        self, api, video_id, frames_indexes, n_frames, input_geometries, temp_frames_dir, log_extra
+    ):
         download_frames_to_paths(
             self.cache,
             api,
