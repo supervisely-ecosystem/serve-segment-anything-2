@@ -12,14 +12,19 @@ jobs:
   Check-Image:
     if: "!github.event.release.prerelease"
     runs-on: gha-runner-supervisely-ecosystem
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: config.json names the image of this release
+        id: check
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: python3 docker/check_image.py --release "$RELEASE_TAG"
+        run: |
+          tag=$(python3 docker/check_image.py --release "$RELEASE_TAG")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   # Builds config.json's image from the release's commit. A tag that is already on Docker Hub (a re-run) is kept,
   # never rebuilt over.
@@ -28,6 +33,8 @@ jobs:
     needs: Check-Image
     uses: supervisely-ecosystem/workflows/.github/workflows/build_image_from_template.yml@master
     with:
+      # The image's tag, not config.json's "version" (the app engine version) that the build would default to
+      tag_version: ${{ needs.Check-Image.outputs.tag }}
       image_name: "segment-anything-2"
       dockerfile_template_path: "docker/Dockerfile"
       # zstd layers: a smaller download that unpacks faster; agents need Docker 23+ / containerd 1.5+

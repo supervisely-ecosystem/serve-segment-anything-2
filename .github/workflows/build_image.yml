@@ -4,10 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_version:
-        description: 'Docker Image Tag (without "v"; default: the tag config.json names). A tag already on Docker Hub is kept, not rebuilt'
-        required: false
+        description: 'Docker Image Tag (without "v"): the tag of config.json''s "docker_image", or a test tag. A tag already on Docker Hub is kept, not rebuilt'
+        required: true
         type: string
-        default: ""
 
 jobs:
   # The same build as a release's (release.yml): config.json's image, or a test tag, from the selected branch.
