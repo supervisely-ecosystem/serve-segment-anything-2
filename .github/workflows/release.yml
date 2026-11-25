@@ -7,8 +7,38 @@ on:
       - main
       - master
 jobs:
+  # Release vX.Y.Z runs on its own image, supervisely/segment-anything-2:X.Y.Z, which carries the app's code:
+  # config.json must name it before anything is built or released.
+  Check-Image:
+    if: "!github.event.release.prerelease"
+    runs-on: gha-runner-supervisely-ecosystem
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: config.json names the image of this release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: python3 docker/check_image.py --release "$RELEASE_TAG"
+
+  # Builds config.json's image from the release's commit. A tag that is already on Docker Hub (a re-run) is kept,
+  # never rebuilt over.
+  Build-Image:
+    if: "!github.event.release.prerelease"
+    needs: Check-Image
+    uses: supervisely-ecosystem/workflows/.github/workflows/build_image_from_template.yml@master
+    secrets:
+      DOCKERHUB_USERNAME: "${{ secrets.DOCKERHUB_USERNAME }}"
+      DOCKERHUB_TOKEN: "${{ secrets.DOCKERHUB_TOKEN }}"
+    with:
+      image_name: "segment-anything-2"
+      dockerfile_template_path: "docker/Dockerfile"
+      # zstd layers: a smaller download that unpacks faster; agents need Docker 23+ / containerd 1.5+
+      compression: zstd
+
   Supervisely-Release:
     if: "!github.event.release.prerelease"
+    needs: Build-Image
     uses: supervisely-ecosystem/workflows/.github/workflows/common.yml@master
     secrets:
       SUPERVISELY_DEV_API_TOKEN: "${{ secrets.SUPERVISELY_DEV_API_TOKEN }}"
@@ -23,3 +53,5 @@ jobs:
       RELEASE_DESCRIPTION: "${{ github.event.release.name }}"
       RELEASE_TYPE: "release"
       SUBAPP_PATHS: "__ROOT_APP__, train"
+      SKIP_IMAGE_VALIDATION: true
+      SKIP_INSTANCE_VERSION_VALIDATION: true
