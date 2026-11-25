@@ -1,0 +1,9 @@
+# The build context of docker/Dockerfile: the app the image carries. Nothing else: no train/,
+# developer files or docs.
+*
+!config.json
+!custom_settings.yaml
+!models/
+!src/
+**/__pycache__/
+**/*.pyc

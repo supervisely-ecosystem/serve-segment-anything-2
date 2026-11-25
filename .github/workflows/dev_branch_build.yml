@@ -4,26 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       tag_version:
-        description: 'Docker Image Tag (without "v")'
-        required: true
-        type: string
-      sdk_version:
-        description: "Supervisely SDK version (optional) - only needed if SDK is installed from branch"
+        description: 'Docker Image Tag (without "v"; default: the tag config.json names). A tag already on Docker Hub is kept, not rebuilt'
         required: false
         type: string
         default: ""
 
 jobs:
   docker-build-and-push:
-    uses: supervisely-ecosystem/workflows/.github/workflows/build_image.yml@master
+    uses: supervisely-ecosystem/workflows/.github/workflows/build_image_from_template.yml@master
     secrets:
       DOCKERHUB_USERNAME: "${{ secrets.DOCKERHUB_USERNAME }}"
       DOCKERHUB_TOKEN: "${{ secrets.DOCKERHUB_TOKEN }}"
     with:
       tag_version: ${{ github.event.inputs.tag_version }}
-      dockerfile_path: docker/Dockerfile
       image_name: "segment-anything-2"
-      sdk_version: ${{ github.event.inputs.sdk_version }}
+      dockerfile_template_path: "docker/Dockerfile"
+      # zstd layers: a smaller download that unpacks faster; agents need Docker 23+ / containerd 1.5+
+      compression: zstd
 
   release-branch:
     needs: docker-build-and-push

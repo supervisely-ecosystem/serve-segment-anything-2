@@ -100,6 +100,18 @@ Fast labeling of images batch via [Batched Smart Tool](https://ecosystem.supervi
 <img src="https://user-images.githubusercontent.com/119248312/229995028-d33b0423-6510-4747-a929-e0e860ccabff.jpg" width="90%"/>
 </div>
 
+# The app's image
+
+Each release has its own image, built from the release: release v1.0.64 runs on `supervisely/segment-anything-2:1.0.64`,
+and so on (`config.json` names it; `docker/check_image.py` fails a pull request or release that does not). The image
+carries the app itself (`src/`, `models/`, `custom_settings.yaml` and `config.json`, in `/app/repo`), so `docker run`
+starts the app outside Supervisely as well, given `SERVER_ADDRESS`, `API_TOKEN` and `TEAM_ID`. It builds on image
+1.0.21, pinned by digest (`docker/Dockerfile`), so a release that changes only code adds only small layers to an image an
+agent already has.
+
+The image's layers are compressed with zstd, so the agent pulls a smaller download that unpacks faster. Pulling it needs
+Docker 23 or newer on a Docker agent, containerd 1.5 or newer on a Kubernetes one.
+
 # Acknowledgment
 
 This app is based on the great work `Segment Anything 2`: [github](https://github.com/facebookresearch/segment-anything-2). ![GitHub Org's stars](https://img.shields.io/github/stars/facebookresearch/segment-anything-2?style=social)
