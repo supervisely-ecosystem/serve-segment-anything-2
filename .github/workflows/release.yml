@@ -27,9 +27,6 @@ jobs:
     if: "!github.event.release.prerelease"
     needs: Check-Image
     uses: supervisely-ecosystem/workflows/.github/workflows/build_image_from_template.yml@master
-    secrets:
-      DOCKERHUB_USERNAME: "${{ secrets.DOCKERHUB_USERNAME }}"
-      DOCKERHUB_TOKEN: "${{ secrets.DOCKERHUB_TOKEN }}"
     with:
       image_name: "segment-anything-2"
       dockerfile_template_path: "docker/Dockerfile"
