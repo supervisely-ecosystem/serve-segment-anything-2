@@ -102,8 +102,9 @@ Fast labeling of images batch via [Batched Smart Tool](https://ecosystem.supervi
 
 # The app's image
 
-Each release has its own image, built from the release: release v1.0.64 runs on `supervisely/segment-anything-2:1.0.64`,
-and so on (`config.json` names it; `docker/check_image.py` fails a pull request or release that does not). The image
+Each release has its own image, built from the release: release v1.0.65 runs on `supervisely/segment-anything-2:1.0.65`,
+and so on (`config.json`'s `docker_image` names it; `docker/check_image.py` fails a pull request or release that does
+not). `config.json`'s `version` stays `2.0.0`: the platform reads it as the app engine version, not the release. The image
 carries the app itself (`src/`, `models/`, `custom_settings.yaml` and `config.json`, in `/app/repo`), so `docker run`
 starts the app outside Supervisely as well, given `SERVER_ADDRESS`, `API_TOKEN` and `TEAM_ID`. It builds on image
 1.0.21, pinned by digest (`docker/Dockerfile`), so a release that changes only code adds only small layers to an image an

@@ -1,7 +1,7 @@
 {
     "name": "Serve Segment Anything 2.1",
     "type": "app",
-    "version": "1.0.64",
+    "version": "2.0.0",
     "description": "Deploy SAM 2 model as REST API service",
     "categories": [
         "neural network",
@@ -26,7 +26,7 @@
         "bitmap"
     ],
     "community_agent": false,
-    "docker_image": "supervisely/segment-anything-2:1.0.64",
+    "docker_image": "supervisely/segment-anything-2:1.0.65",
     "instance_version": "6.15.35",
     "entrypoint": "python3 -m uvicorn src.main:m.app --app-dir ./serve --host 0.0.0.0 --port 8000 --ws websockets",
     "port": 8000,

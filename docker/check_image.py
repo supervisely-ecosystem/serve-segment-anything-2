@@ -1,10 +1,13 @@
 """Checks that config.json names the image of the release and that docker/Dockerfile starts the app as config.json does.
 
 Every release vX.Y.Z of the app has its own image, supervisely/segment-anything-2:X.Y.Z, which carries the app's code: the
-Release workflow builds it from the release's commit. config.json's "version" is X.Y.Z too.
+Release workflow builds it from the release's commit. config.json's "version" is not the release: the platform reads it as
+the app engine version, and an app below 2.0.0 is served as a v1 app.
 
-    python3 docker/check_image.py                   # pull requests: config.json and docker/Dockerfile agree
-    python3 docker/check_image.py --release v2.2.0  # the Release workflow, before it builds anything
+    python3 docker/check_image.py                    # pull requests: config.json and docker/Dockerfile agree
+    python3 docker/check_image.py --release v1.0.65  # the Release workflow, before it builds anything
+
+It prints the image's tag (X.Y.Z) last, on its own line, for the workflow to build.
 """
 
 import argparse
@@ -44,17 +47,18 @@ def last(found: list, keyword: str):
 
 def check(config: dict, release) -> list:
     errors = []
-    version = config.get("version", "")
-    image = f"{IMAGE}:{version}"
-    if not VERSION.fullmatch(version):
-        errors.append(f'config.json: "version" is {version!r}, not X.Y.Z')
-    elif config.get("docker_image") != image:
-        errors.append(f'config.json: "docker_image" is {config.get("docker_image")!r}; version {version} runs on {image!r}')
-    if release is not None and release != f"v{version}":
+    engine = config.get("version", "")
+    if not VERSION.fullmatch(engine) or int(engine.split(".")[0]) < 2:
+        errors.append(f'config.json: "version" is the app engine version, 2.x.y for this app, not {engine!r}')
+    image = config.get("docker_image", "")
+    name, _, tag = image.partition(":")
+    if name != IMAGE or not VERSION.fullmatch(tag):
+        errors.append(f'config.json: "docker_image" is {image!r}, not {IMAGE}:X.Y.Z')
+    elif release is not None and release != f"v{tag}":
         wanted = release[1:] if release.startswith("v") and VERSION.fullmatch(release[1:]) else "X.Y.Z"
         errors.append(
-            f"release {release!r} is not config.json's version {version}: release a commit whose config.json has "
-            f'"version": "{wanted}" and "docker_image": "{IMAGE}:{wanted}" (releases are vX.Y.Z)'
+            f"release {release!r} does not run on config.json's image {image}: release a commit whose config.json has "
+            f'"docker_image": "{IMAGE}:{wanted}" (releases are vX.Y.Z)'
         )
 
     found = instructions(ROOT / "docker" / "Dockerfile")
@@ -81,7 +85,8 @@ def main() -> int:
         print(f"ERROR: {error}", file=sys.stderr)
     if errors:
         return 1
-    print(f"OK: {config['docker_image']}, WORKDIR {APP_DIR}, CMD {config['entrypoint']}")
+    print(f"OK: {config['docker_image']}, WORKDIR {APP_DIR}, CMD {config['entrypoint']}", file=sys.stderr)
+    print(config["docker_image"].partition(":")[2])
     return 0
 
 
