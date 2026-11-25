@@ -13,9 +13,6 @@ jobs:
   # The same build as a release's (release.yml): config.json's image, or a test tag, from the selected branch.
   docker-build-and-push:
     uses: supervisely-ecosystem/workflows/.github/workflows/build_image_from_template.yml@master
-    secrets:
-      DOCKERHUB_USERNAME: "${{ secrets.DOCKERHUB_USERNAME }}"
-      DOCKERHUB_TOKEN: "${{ secrets.DOCKERHUB_TOKEN }}"
     with:
       tag_version: ${{ github.event.inputs.tag_version }}
       image_name: "segment-anything-2"
