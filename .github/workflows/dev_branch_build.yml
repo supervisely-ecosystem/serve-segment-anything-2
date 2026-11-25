@@ -18,6 +18,8 @@ jobs:
       dockerfile_template_path: "docker/Dockerfile"
       # zstd layers: a smaller download that unpacks faster; agents need Docker 23+ / containerd 1.5+
       compression: zstd
+      # No registry cache export: exporting it alongside the ~25 GB image ran buildkitd out of its 32 GiB.
+      build_cache: false
 
   release-branch:
     needs: docker-build-and-push
