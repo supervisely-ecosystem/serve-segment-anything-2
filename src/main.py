@@ -620,6 +620,10 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
         self.model_cache = Cache(maxsize=100, ttl=5 * 60)
         # set variables for smart tool mode
         self._inference_image_lock = threading.Lock()
+        # Automatic mask generation needs ~2 GiB of activations per image, so
+        # concurrent "raw" requests overrun a small GPU slice together where
+        # each would fit alone. Run them one at a time.
+        self._raw_inference_lock = threading.Lock()
 
         # TODO: add maxsize after discuss
         self._inference_image_cache = Cache(ttl=60)
@@ -672,14 +676,20 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 )
             else:
                 cached_data = self.model_cache.get(settings["input_image_id"])
-                cached_data["features"]["image_embed"] = cached_data["features"][
-                    "image_embed"
-                ].to(self.torch_device)
-                cached_data["features"]["high_res_feats"] = [
-                    element.to(self.torch_device)
-                    for element in cached_data["features"]["high_res_feats"]
-                ]
-                self.predictor._features = cached_data["features"]
+                cached_features = cached_data["features"]
+                # Copies on the device for the predictor; the cache keeps the
+                # CPU tensors. Writing the device copies back into the cache
+                # would hold up to `maxsize` images' features in VRAM.
+                self.predictor._features = {
+                    **cached_features,
+                    "image_embed": cached_features["image_embed"].to(
+                        self.torch_device
+                    ),
+                    "high_res_feats": [
+                        element.to(self.torch_device)
+                        for element in cached_features["high_res_feats"]
+                    ],
+                }
                 self.predictor._orig_hw = cached_data["original_size"]
 
     def _deserialize_geometry(self, data: dict):
@@ -723,7 +733,9 @@ class SegmentAnything2(sly.nn.inference.PromptableSegmentation):
                 output_mode=settings["output_mode"],
                 use_m2m=settings["use_m2m"],
             )
-            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            with self._raw_inference_lock, torch.inference_mode(), torch.autocast(
+                "cuda", dtype=torch.bfloat16
+            ):
                 masks = mask_generator.generate(input_image)
             for i, mask in enumerate(masks):
                 # get predicted mask
